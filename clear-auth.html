@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Clear Authentication</title>
+</head>
+<body>
+    <h1>Clear Authentication Data</h1>
+    <button onclick="clearAuth()">Clear Auth Data</button>
+    <button onclick="checkAuth()">Check Auth Data</button>
+    <div id="output"></div>
+    
+    <script>
+        function clearAuth() {
+            localStorage.removeItem('token');
+            localStorage.removeItem('userRole');
+            document.getElementById('output').innerHTML = '<p style="color: green;">Authentication data cleared!</p>';
+        }
+        
+        function checkAuth() {
+            const token = localStorage.getItem('token');
+            const userRole = localStorage.getItem('userRole');
+            document.getElementById('output').innerHTML = `
+                <p><strong>Token:</strong> ${token || 'None'}</p>
+                <p><strong>User Role:</strong> ${userRole || 'None'}</p>
+            `;
+        }
+        
+        // Auto-check on load
+        window.onload = checkAuth;
+    </script>
+</body>
+</html>

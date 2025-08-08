@@ -1,0 +1,104 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Global Styles */
+:root {
+  --primary-color: #3498db;
+  --secondary-color: #2ecc71;
+  --dark-color: #2c3e50;
+  --light-color: #ecf0f1;
+  --danger-color: #e74c3c;
+  --success-color: #27ae60;
+}
+
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
+    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background-color: #f8f9fa;
+}
+
+@layer components {
+  .navbar-brand {
+    @apply font-bold text-primary;
+  }
+
+  .card {
+    @apply mb-6 rounded-lg shadow-card;
+  }
+
+  .btn-primary {
+    @apply bg-primary border-primary text-white py-2 px-4 rounded hover:bg-opacity-90 transition-colors;
+  }
+
+  .btn-success {
+    @apply bg-secondary border-secondary text-white py-2 px-4 rounded hover:bg-opacity-90 transition-colors;
+  }
+  
+  .container {
+    @apply mx-auto px-4 max-w-7xl;
+  }
+  
+  .form-control {
+    @apply w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent;
+  }
+}
+
+@layer components {
+  /* Editor Styles */
+  .editor-container {
+    @apply rounded-lg overflow-hidden shadow-card h-[400px];
+  }
+
+  .room-code {
+    @apply font-mono font-bold bg-light py-2 px-4 rounded;
+  }
+
+  .test-case-card {
+    @apply border-l-4 border-primary;
+  }
+
+  .solved {
+    @apply border-l-4 border-success;
+  }
+
+  .not-solved {
+    @apply border-l-4 border-danger;
+  }
+
+  /* Auth Pages */
+  .auth-container {
+    @apply max-w-md mx-auto my-8;
+  }
+
+  /* Room List */
+  .room-list-item {
+    @apply transition-transform duration-200;
+  }
+
+  .room-list-item:hover {
+    @apply -translate-y-0.5;
+  }
+
+  /* Monaco Editor Customizations */
+  .monaco-editor {
+    @apply pt-2.5;
+  }
+
+  /* Socket Status Indicator */
+  .socket-status {
+    @apply w-2.5 h-2.5 rounded-full inline-block mr-1.5;
+  }
+
+  .socket-connected {
+    @apply bg-success;
+  }
+
+  .socket-disconnected {
+    @apply bg-danger;
+  }
+}

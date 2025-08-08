@@ -1,0 +1,87 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+model room {
+  id              String            @id
+  createdAt       DateTime          @default(now())
+  teacherId       String
+  updatedAt       DateTime
+  batchYear       String?
+  code            String?
+  college         String?
+  roomName        String
+  subject         String?
+  totalDuration   Int?
+  totalStudents   Int?
+  user            user?             @relation(fields: [teacherId], references: [id], map: "Room_teacherId_fkey")
+  roomparticipant roomparticipant[]
+  testcase        testcase[]
+
+  @@index([teacherId], map: "Room_teacherId_fkey")
+}
+
+model roomparticipant {
+  id        String   @id
+  roomId    String
+  studentId String
+  joinedAt  DateTime @default(now())
+  room      room     @relation(fields: [roomId], references: [id], map: "RoomParticipant_roomId_fkey")
+  user      user     @relation(fields: [studentId], references: [id], map: "RoomParticipant_studentId_fkey")
+
+  @@index([roomId], map: "RoomParticipant_roomId_fkey")
+  @@index([studentId], map: "RoomParticipant_studentId_fkey")
+}
+
+model submission {
+  id         String   @id
+  testCaseId String
+  userId     String?
+  code       String
+  output     String
+  status     String
+  studentId  String
+  createdAt  DateTime @default(now())
+  testcase   testcase @relation(fields: [testCaseId], references: [id], map: "Submission_testCaseId_fkey")
+  user       user?    @relation(fields: [userId], references: [id], map: "Submission_userId_fkey")
+
+  @@index([testCaseId], map: "Submission_testCaseId_fkey")
+  @@index([userId], map: "Submission_userId_fkey")
+}
+
+model testcase {
+  id             String       @id
+  roomId         String
+  input          String
+  expectedOutput String
+  title          String       @default("Untitled Test Case")
+  createdAt      DateTime     @default(now())
+  createdBy      String
+  submission     submission[]
+  room           room         @relation(fields: [roomId], references: [id], onDelete: Cascade, map: "TestCase_roomId_fkey")
+
+  @@index([roomId], map: "TestCase_roomId_fkey")
+}
+
+model user {
+  id              String            @id
+  name            String
+  email           String            @unique(map: "User_email_key")
+  password        String
+  role            user_role
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime
+  room            room[]
+  roomparticipant roomparticipant[]
+  submission      submission[]
+}
+
+enum user_role {
+  TEACHER
+  STUDENT
+}
