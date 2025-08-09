@@ -2,7 +2,7 @@ import express from 'express';
 import dotenv from 'dotenv';
 import cors from 'cors';
 import http from 'http';
-import initializeSocket from './socket.js';
+import { initializeSocket } from './socket.js'; // changed to named import
 import redisClient from './redis/redisClient.js';
 
 import authRoutes from './routes/authRoutes.js';
@@ -28,14 +28,14 @@ redisClient.on('end', () => console.log('❌ Redis connection closed'));
 
 // Routes
 app.use('/api/auth', authRoutes);
-app.use('/api/rooms', roomRoutes); // ✅ plural to match your frontend
+app.use('/api/room', roomRoutes); // Use singular form to match frontend
 app.use('/api/code', codeRoutes);
 app.use('/api/testcases', testCaseRoutes);
 app.use('/api/submissions', submissionRoutes);
-app.use('/api/room', roomRoutes);
 
 app.get('/', (req, res) => res.send('API is running...'));
 
+// Initialize socket.io
 initializeSocket(server);
 
 const PORT = process.env.PORT || 5000;

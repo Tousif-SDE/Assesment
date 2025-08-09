@@ -1,114 +1,219 @@
+// server/socket.js
 import { Server } from 'socket.io';
 
-const initializeSocket = (server) => {
-  const io = new Server(server, {
-    cors: {
-      origin: 'http://localhost:5173',
-      methods: ['GET', 'POST'],
-      credentials: true,
-    },
-  });
+class SocketManager {
+  constructor(server) {
+    this.io = new Server(server, {
+      cors: {
+        origin: process.env.CLIENT_URL || "http://localhost:5173/",
+        methods: ["GET", "POST"],
+        credentials: true
+      },
+      transports: ['websocket', 'polling'],
+      allowEIO3: true,
+      pingTimeout: 60000,
+      pingInterval: 25000
+    });
 
-  // Track active students per room
-  const activeStudents = {};
-  const studentStatus = {};
+    this.rooms = new Map();
+    this.userSessions = new Map();
 
-  io.on('connection', (socket) => {
-    console.log('🔌 Client connected:', socket.id);
-    let currentRoom = null;
+    this.setupSocketHandlers();
+  }
 
-    socket.on('join-room', ({ roomId }) => {
-      socket.join(roomId);
-      currentRoom = roomId;
-      console.log(`👥 ${socket.id} joined room ${roomId}`);
-      
-      // Initialize room tracking if needed
-      if (!activeStudents[roomId]) {
-        activeStudents[roomId] = new Set();
-      }
-      if (!studentStatus[roomId]) {
-        studentStatus[roomId] = {};
-      }
-      
-      // Add student to active list
-      activeStudents[roomId].add(socket.id);
-      
-      // Emit updated student list to room
-      io.to(roomId).emit('student-update', { 
-        students: Array.from(activeStudents[roomId])
+  setupSocketHandlers() {
+    this.io.on('connection', (socket) => {
+      console.log(`Socket connected: ${socket.id}`);
+
+      socket.on('join-room', ({ roomId, timestamp, userAgent, sessionId }) => {
+        this.handleJoinRoom(socket, roomId, sessionId, { timestamp, userAgent });
+      });
+
+      socket.on('leave-room', ({ roomId, timestamp }) => {
+        this.handleLeaveRoom(socket, roomId, timestamp);
+      });
+
+      socket.on('code-change', ({ roomId, code, timestamp, sessionId }) => {
+        this.handleCodeChange(socket, roomId, code, timestamp, sessionId);
+      });
+
+      socket.on('output-change', ({ roomId, output, timestamp, sessionId }) => {
+        this.handleOutputChange(socket, roomId, output, timestamp, sessionId);
+      });
+
+      socket.on('language-change', ({ roomId, language, timestamp, sessionId }) => {
+        this.handleLanguageChange(socket, roomId, language, timestamp, sessionId);
+      });
+
+      socket.on('input-change', ({ roomId, input, timestamp, sessionId }) => {
+        this.handleInputChange(socket, roomId, input, timestamp, sessionId);
+      });
+
+      socket.on('test-case-created', ({ roomId, testCase, timestamp }) => {
+        this.handleTestCaseCreated(socket, roomId, testCase, timestamp);
+      });
+
+      socket.on('submission-status', ({ roomId, status, testCaseId, studentId, timeTaken }) => {
+        this.handleSubmissionStatus(socket, roomId, status, testCaseId, studentId, timeTaken);
+      });
+
+      socket.on('heartbeat', ({ roomId, timestamp }) => {
+        this.handleHeartbeat(socket, roomId, timestamp);
+      });
+
+      socket.on('disconnect', (reason) => {
+        this.handleDisconnect(socket, reason);
+      });
+
+      socket.on('error', (error) => {
+        console.error(`Socket error for ${socket.id}:`, error);
       });
     });
+  }
 
-    socket.on('leave-room', ({ roomId }) => {
-      socket.leave(roomId);
-      console.log(`👋 ${socket.id} left room ${roomId}`);
-      
-      // Remove student from active list
-      if (activeStudents[roomId]) {
-        activeStudents[roomId].delete(socket.id);
-        
-        // Emit updated student list to room
-        io.to(roomId).emit('student-update', { 
-          students: Array.from(activeStudents[roomId])
-        });
+  handleJoinRoom(socket, roomId, sessionId, metadata = {}) {
+    if (!roomId) {
+      socket.emit('room-error', { error: 'Room ID is required', message: 'Please provide a valid room ID' });
+      return;
+    }
+    socket.join(roomId);
+    socket.roomId = roomId;
+    socket.sessionId = sessionId;
+    socket.joinedAt = new Date();
+
+    if (!this.rooms.has(roomId)) {
+      this.rooms.set(roomId, {
+        id: roomId,
+        students: [],
+        teachers: [],
+        testCases: [],
+        createdAt: new Date(),
+        lastActivity: new Date()
+      });
+    }
+
+    const roomData = this.rooms.get(roomId);
+    const isTeacher = sessionId && sessionId.startsWith('teacher-');
+
+    const userData = {
+      socketId: socket.id,
+      sessionId,
+      joinedAt: socket.joinedAt,
+      lastSeen: new Date(),
+      metadata
+    };
+
+    if (isTeacher) {
+      roomData.teachers = roomData.teachers.filter(t => t.sessionId !== sessionId);
+      roomData.teachers.push(userData);
+    } else {
+      roomData.students = roomData.students.filter(s => s.sessionId !== sessionId);
+      roomData.students.push(userData);
+    }
+
+    roomData.lastActivity = new Date();
+    this.userSessions.set(socket.id, { roomId, sessionId, isTeacher, joinedAt: socket.joinedAt });
+
+    console.log(`${isTeacher ? 'Teacher' : 'Student'} joined room ${roomId}: ${sessionId}`);
+
+    socket.emit('room-joined', {
+      success: true,
+      message: `Successfully joined room ${roomId}`,
+      roomInfo: {
+        students: roomData.students.length,
+        teachers: roomData.teachers.length,
+        testCases: roomData.testCases.length
       }
     });
 
-    // Code changes from teacher to students
-    socket.on('code-change', ({ roomId, code }) => {
-      socket.to(roomId).emit('code-update', { code });
-    });
+    this.broadcastStudentUpdate(roomId);
+  }
 
-    // Output changes from teacher to students
-    socket.on('output-change', ({ roomId, output }) => {
-      socket.to(roomId).emit('output-update', { output });
-    });
-    
-    // Language changes from teacher to students
-    socket.on('language-change', ({ roomId, language }) => {
-      socket.to(roomId).emit('language-update', { language });
-    });
-    
-    // Input changes from teacher to students
-    socket.on('input-change', ({ roomId, input }) => {
-      socket.to(roomId).emit('input-update', { input });
-    });
-    
-    // Submission status from students to teacher
-    socket.on('submission-status', ({ roomId, status, testCaseId }) => {
-      // Update student status for this test case
-      if (studentStatus[roomId]) {
-        if (!studentStatus[roomId][testCaseId]) {
-          studentStatus[roomId][testCaseId] = {};
+  handleLeaveRoom(socket, roomId, timestamp) {
+    if (socket.roomId && this.rooms.has(socket.roomId)) {
+      const roomData = this.rooms.get(socket.roomId);
+      const sessionInfo = this.userSessions.get(socket.id);
+
+      if (sessionInfo) {
+        if (sessionInfo.isTeacher) {
+          roomData.teachers = roomData.teachers.filter(t => t.socketId !== socket.id);
+        } else {
+          roomData.students = roomData.students.filter(s => s.socketId !== socket.id);
         }
-        studentStatus[roomId][testCaseId][socket.id] = status;
-        
-        // Emit updated status to room (primarily for teacher)
-        io.to(roomId).emit('submission-update', { 
-          testCaseId,
-          studentId: socket.id,
-          status,
-          statusMap: studentStatus[roomId][testCaseId]
-        });
+        roomData.lastActivity = new Date();
+        console.log(`${sessionInfo.isTeacher ? 'Teacher' : 'Student'} left room ${socket.roomId}`);
+        this.broadcastStudentUpdate(socket.roomId);
       }
-    });
 
-    socket.on('disconnect', () => {
-      console.log('❌ Disconnected:', socket.id);
-      
-      // Remove from all active rooms
-      if (currentRoom) {
-        if (activeStudents[currentRoom]) {
-          activeStudents[currentRoom].delete(socket.id);
-          
-          // Emit updated student list
-          io.to(currentRoom).emit('student-update', { 
-            students: Array.from(activeStudents[currentRoom])
-          });
-        }
+      if (roomData.students.length === 0 && roomData.teachers.length === 0) {
+        this.rooms.delete(socket.roomId);
       }
-    });
-  });
-};
+    }
+    socket.leave(roomId);
+    this.userSessions.delete(socket.id);
+    socket.emit('room-left', { success: true, message: `You have left room ${roomId}`, timestamp });
+  }
 
-export default initializeSocket;
+  handleCodeChange(socket, roomId, code, timestamp, sessionId) {
+    socket.to(roomId).emit('code-update', { code, timestamp, sessionId });
+  }
+
+  handleOutputChange(socket, roomId, output, timestamp, sessionId) {
+    socket.to(roomId).emit('output-update', { output, timestamp, sessionId });
+  }
+
+  handleLanguageChange(socket, roomId, language, timestamp, sessionId) {
+    socket.to(roomId).emit('language-update', { language, timestamp, sessionId });
+  }
+
+  handleInputChange(socket, roomId, input, timestamp, sessionId) {
+    socket.to(roomId).emit('input-update', { input, timestamp, sessionId });
+  }
+
+  handleTestCaseCreated(socket, roomId, testCase, timestamp) {
+    socket.to(roomId).emit('test-case-created', { testCase, timestamp });
+  }
+
+  handleSubmissionStatus(socket, roomId, status, testCaseId, studentId, timeTaken) {
+    socket.to(roomId).emit('submission-update', { status, testCaseId, studentId, timeTaken });
+  }
+
+  handleHeartbeat(socket, roomId, timestamp) {
+    const sessionInfo = this.userSessions.get(socket.id);
+    if (sessionInfo) sessionInfo.lastSeen = new Date();
+    socket.emit('heartbeat-ack', { timestamp });
+  }
+
+  handleDisconnect(socket, reason) {
+    console.log(`Socket disconnected: ${socket.id}, reason: ${reason}`);
+    const sessionInfo = this.userSessions.get(socket.id);
+    if (sessionInfo && this.rooms.has(sessionInfo.roomId)) {
+      const roomData = this.rooms.get(sessionInfo.roomId);
+      if (sessionInfo.isTeacher) {
+        roomData.teachers = roomData.teachers.filter(t => t.socketId !== socket.id);
+      } else {
+        roomData.students = roomData.students.filter(s => s.socketId !== socket.id);
+      }
+      this.broadcastStudentUpdate(sessionInfo.roomId);
+      if (roomData.students.length === 0 && roomData.teachers.length === 0) {
+        this.rooms.delete(sessionInfo.roomId);
+      }
+    }
+    this.userSessions.delete(socket.id);
+  }
+
+  broadcastStudentUpdate(roomId) {
+    if (this.rooms.has(roomId)) {
+      const roomData = this.rooms.get(roomId);
+      this.io.to(roomId).emit('student-update', {
+        students: roomData.students,
+        teachers: roomData.teachers
+      });
+    }
+  }
+}
+
+// ✅ Export initializeSocket for index.js
+export function initializeSocket(server) {
+  return new SocketManager(server);
+}

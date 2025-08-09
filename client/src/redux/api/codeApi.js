@@ -38,6 +38,10 @@ export const codeApi = apiSlice.injectEndpoints({
       query: () => '/submissions/student',
       providesTags: ['Submission'],
     }),
+    getRoomSubmissions: builder.query({
+      query: (roomId) => `/submissions/room/${roomId}`,
+      providesTags: ['Submission'],
+    }),
   }),
 })
 
@@ -47,4 +51,5 @@ export const {
   useGetTestCasesByRoomQuery,
   useCreateSubmissionMutation,
   useGetSubmissionsByStudentQuery,
+  useGetRoomSubmissionsQuery,
 } = codeApi

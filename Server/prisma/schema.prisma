@@ -19,7 +19,7 @@ model room {
   subject         String?
   totalDuration   Int?
   totalStudents   Int?
-  user            user?             @relation(fields: [teacherId], references: [id], map: "Room_teacherId_fkey")
+  user            user              @relation(fields: [teacherId], references: [id], map: "Room_teacherId_fkey")
   roomparticipant roomparticipant[]
   testcase        testcase[]
 
@@ -59,9 +59,9 @@ model testcase {
   roomId         String
   input          String
   expectedOutput String
-  title          String       @default("Untitled Test Case")
   createdAt      DateTime     @default(now())
   createdBy      String
+  title          String       @default("Untitled Test Case")
   submission     submission[]
   room           room         @relation(fields: [roomId], references: [id], onDelete: Cascade, map: "TestCase_roomId_fkey")
 

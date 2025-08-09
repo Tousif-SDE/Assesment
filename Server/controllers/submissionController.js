@@ -1,11 +1,11 @@
-// Server/controllers/submissionController.js
 import prisma from '../prisma/prismaClient.js';
 import axios from 'axios';
+import { v4 as uuidv4 } from 'uuid'; // ✅ Moved import here
 
 // ✅ Create Submission
 export const createSubmission = async (req, res) => {
   try {
-    const { testCaseId, code, language } = req.body;
+    const { testCaseId, code, language, timeTaken } = req.body;
     const studentId = req.user.id;
 
     const testCase = await prisma.testcase.findUnique({
@@ -31,23 +31,21 @@ export const createSubmission = async (req, res) => {
       }
     );
 
-    const actualOutput = response.data.stdout?.trim();
+    const actualOutput = response.data.stdout?.trim() || '';
     const expected = testCase.expectedOutput.trim();
     const status = actualOutput === expected ? 'Solved' : 'Not Solved';
 
-    // Generate a UUID for the submission ID
-    const { v4: uuidv4 } = await import('uuid');
-    const submissionId = uuidv4();
-    
     const submission = await prisma.submission.create({
       data: {
-        id: submissionId,
+        id: uuidv4(),
         studentId,
         code,
-        output: actualOutput || '',
+        output: actualOutput,
         status,
-        testcase: {
-          connect: { id: testCaseId } // Connect to testcase using the correct field name
+        timeTaken: timeTaken || 0, // Store the time taken to solve the test case
+        // ✅ Use correct relation name
+        testcase: { 
+          connect: { id: testCaseId }
         }
       },
     });
@@ -59,7 +57,7 @@ export const createSubmission = async (req, res) => {
   }
 };
 
-// ✅ Get Submissions by Student (with student name)
+// ✅ Get Submissions by Student
 export const getSubmissionsByStudent = async (req, res) => {
   try {
     const studentId = req.user.id;
@@ -67,24 +65,24 @@ export const getSubmissionsByStudent = async (req, res) => {
     const submissions = await prisma.submission.findMany({
       where: { studentId },
       include: {
-        testcase: {
+        // ✅ Correct relation name from schema
+        testcase: { 
           select: {
             id: true,
             input: true,
             expectedOutput: true,
             roomId: true,
-            title: true, // Include the title field
+            title: true,
           },
         },
-        user: { // This should be 'user' to match the model relationship
-           select: {
-            name: true, // 👈 get student name here
-          },
+        // ✅ Correct relation for user
+        user: { 
+          select: { name: true },
         },
       },
     });
 
-    if (submissions.length === 0) {
+    if (!submissions.length) {
       return res.json({
         totalActive: 0,
         totalAttempted: 0,
@@ -110,7 +108,7 @@ export const getSubmissionsByStudent = async (req, res) => {
         id: sub.testcase.id,
         input: sub.testcase.input,
         expectedOutput: sub.testcase.expectedOutput,
-        title: sub.testcase.title, // Include the title field
+        title: sub.testcase.title,
       }));
 
     res.json({
@@ -118,10 +116,115 @@ export const getSubmissionsByStudent = async (req, res) => {
       totalAttempted,
       totalSolved,
       solvedTestCases,
-      submissions, // includes student name in each submission
+      submissions,
     });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Failed to get submissions', details: err.message });
+  }
+};
+
+// Get Submissions by Room (for teacher statistics)
+export const getSubmissionsByRoom = async (req, res) => {
+  try {
+    const { roomId } = req.params;
+    const teacherId = req.user.id;
+
+    // Verify that the teacher owns this room
+    const room = await prisma.room.findFirst({
+      where: { 
+        id: roomId,
+        teacherId 
+      },
+    });
+
+    if (!room) {
+      return res.status(403).json({ error: 'Not authorized to access this room' });
+    }
+
+    // Get all test cases for this room
+    const testCases = await prisma.testcase.findMany({
+      where: { roomId },
+    });
+
+    // Get all submissions for this room
+    const submissions = await prisma.submission.findMany({
+      where: {
+        testcase: {
+          roomId,
+        },
+      },
+      include: {
+        testcase: true,
+        user: {
+          select: {
+            id: true,
+            name: true,
+            email: true,
+          },
+        },
+      },
+      orderBy: {
+        createdAt: 'desc',
+      },
+    });
+
+    // Calculate statistics
+    const totalTestCases = testCases.length;
+    
+    // Group submissions by student
+    const studentSubmissions = {};
+    submissions.forEach(sub => {
+      if (!studentSubmissions[sub.studentId]) {
+        studentSubmissions[sub.studentId] = {
+          student: sub.user,
+          submissions: [],
+          solved: 0,
+          attempted: 0,
+          averageTime: 0,
+          totalTime: 0,
+        };
+      }
+      
+      studentSubmissions[sub.studentId].submissions.push(sub);
+      
+      // Count unique test cases attempted
+      const testCaseIds = new Set(studentSubmissions[sub.studentId].submissions.map(s => s.testcase.id));
+      studentSubmissions[sub.studentId].attempted = testCaseIds.size;
+      
+      // Add to total time if solved
+      if (sub.status === 'Solved') {
+        studentSubmissions[sub.studentId].totalTime += sub.timeTaken || 0;
+      }
+    });
+    
+    // Calculate solved count and average time for each student
+    Object.values(studentSubmissions).forEach(student => {
+      // Get unique solved test cases
+      const solvedTestCaseIds = new Set();
+      student.submissions.forEach(sub => {
+        if (sub.status === 'Solved') {
+          solvedTestCaseIds.add(sub.testcase.id);
+        }
+      });
+      
+      // Set solved count
+      student.solved = solvedTestCaseIds.size;
+      
+      // Calculate average time
+      const solvedSubmissions = student.submissions.filter(sub => sub.status === 'Solved');
+      student.averageTime = solvedSubmissions.length > 0 
+        ? Math.round(student.totalTime / solvedSubmissions.length) 
+        : 0;
+    });
+
+    res.json({
+      totalTestCases,
+      students: Object.values(studentSubmissions),
+      testCases,
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to get room submissions', details: err.message });
   }
 };
