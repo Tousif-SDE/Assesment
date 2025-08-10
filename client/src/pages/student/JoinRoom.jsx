@@ -1,32 +1,50 @@
-import { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
-import { useJoinRoomMutation } from '../../redux/api/roomApi'
+// client/src/pages/student/JoinRoom.jsx
+import { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { useJoinRoomMutation } from '../../redux/api/roomApi';
 
 const JoinRoom = () => {
-  const [roomCode, setRoomCode] = useState('')
-  const [error, setError] = useState(null)
+  const [roomCode, setRoomCode] = useState('');
+  const [error, setError] = useState(null);
   
-  const navigate = useNavigate()
-  const [joinRoom, { isLoading }] = useJoinRoomMutation()
+  const navigate = useNavigate();
+  const [joinRoom, { isLoading }] = useJoinRoomMutation();
 
   const submitHandler = async (e) => {
-    e.preventDefault()
-    setError(null)
+    e.preventDefault();
+    setError(null);
 
     if (!roomCode.trim()) {
-      setError('Please enter a room code')
-      return
+      setError('Please enter a room code');
+      return;
     }
 
     try {
       // Pass the code as an object with a code property
-      const result = await joinRoom({ code: roomCode }).unwrap()
-      navigate(`/student/room/${result.room.id}`)
+      const result = await joinRoom({ code: roomCode }).unwrap();
+      if (result.message === 'Already joined this room' && result.room) {
+        setError('You have already joined this room. Redirecting...');
+        setTimeout(() => {
+          navigate(`/student/room/${result.room.id}`);
+        }, 1200);
+      } else {
+        navigate(`/student/room/${result.room.id}`);
+      }
     } catch (err) {
-      console.error('Error joining room:', err)
-      setError(err?.data?.message || 'Failed to join room')
+      console.error('Error joining room:', err);
+      let errorMsg = 'Failed to join room';
+      if (err?.data?.message) {
+        errorMsg = err.data.message;
+      } else if (err?.message) {
+        errorMsg = err.message;
+      } else if (typeof err === 'string') {
+        errorMsg = err;
+      } else if (err?.status === 500 && err?.data?.error) {
+        errorMsg = err.data.error;
+      }
+      setError(errorMsg);
     }
-  }
+  };
 
   return (
     <div className="container mx-auto px-4 py-8">
@@ -70,7 +88,7 @@ const JoinRoom = () => {
         </div>
       </div>
     </div>
-  )
-}
+  );
+};
 
-export default JoinRoom
+export default JoinRoom;

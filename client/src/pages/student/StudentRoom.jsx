@@ -1,6 +1,7 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
-import { useParams } from 'react-router-dom'
-import { useSelector, useDispatch } from 'react-redux'
+// client/src/pages/student/StudentRoom.jsx
+import { useState, useEffect, useCallback, useRef } from 'react';
+import { useParams, useNavigate } from 'react-router-dom';
+import { useSelector, useDispatch } from 'react-redux';
 import {
   setCode,
   setInput,
@@ -9,850 +10,882 @@ import {
   setEditable,
   setRoomId,
   setTestCase,
-  updateEditorState,
-} from '../../redux/slices/editorSlice'
+} from '../../redux/slices/editorSlice';
 import {
   useRunCodeMutation,
   useCreateSubmissionMutation,
   useGetTestCasesByRoomQuery,
   useGetSubmissionsByStudentQuery,
-} from '../../redux/api/codeApi'
-import CodeEditor from '../../components/editor/CodeEditor'
-import LanguageSelector from '../../components/editor/LanguageSelector'
-import useSocket from '../../hooks/useSocket'
-import Confetti from 'react-confetti'
+} from '../../redux/api/codeApi';
+import CodeEditor from '../../components/editor/CodeEditor';
+import LanguageSelector from '../../components/editor/LanguageSelector';
+import useSocket from '../../hooks/useSocket';
 
 const StudentRoom = () => {
-  const { roomId } = useParams()
-  const dispatch = useDispatch()
-  const { code, input, output, language, isEditable, testCase } = useSelector((state) => state.editor)
+  const { roomId } = useParams();
+  const navigate = useNavigate();
+  const dispatch = useDispatch();
+  const { code, input, output, language, isEditable, testCase } = useSelector((state) => state.editor);
   
-  const [error, setError] = useState(null)
-  const [success, setSuccess] = useState(null)
-  const [selectedTestCase, setSelectedTestCase] = useState(null)
-  const [activeTab, setActiveTab] = useState('broadcast') // Default to broadcast tab
-  const [studentCode, setStudentCode] = useState('') // Student's own code
-  const [newTestCases, setNewTestCases] = useState({}) // Track new test cases
-  const [showConfetti, setShowConfetti] = useState(false) // For confetti animation
-  const [showAchievement, setShowAchievement] = useState(false) // For achievement notification
-  const [startTime, setStartTime] = useState(null) // For tracking time spent on a test case
-  const [elapsedTime, setElapsedTime] = useState(0) // Elapsed time in seconds
-  const [isInitialized, setIsInitialized] = useState(false)
-  const [lastBroadcastReceived, setLastBroadcastReceived] = useState(null)
+  const [error, setError] = useState(null);
+  const [success, setSuccess] = useState(null);
+  const [selectedTestCase, setSelectedTestCase] = useState(null);
+  const [activeTab, setActiveTab] = useState('broadcast');
+  const [studentCode, setStudentCode] = useState('');
+  const [studentOutput, setStudentOutput] = useState(''); // Separate output for student's code
+  const [newTestCases, setNewTestCases] = useState({});
+  const [startTime, setStartTime] = useState(null);
+  const [elapsedTime, setElapsedTime] = useState(0);
+  const [isInitialized, setIsInitialized] = useState(false);
   
-  // Refs for stable references
-  const newTestCasesRef = useRef(newTestCases)
-  const selectedTestCaseRef = useRef(selectedTestCase)
+  // Use refs to track the latest values
+  const latestCodeRef = useRef(code);
+  const latestInputRef = useRef(input);
+  const latestOutputRef = useRef(output);
+  const latestLanguageRef = useRef(language);
+  const isEditableRef = useRef(isEditable);
   
-  const [runCode, { isLoading: isRunning }] = useRunCodeMutation()
-  const [createSubmission, { isLoading: isSubmitting }] = useCreateSubmissionMutation()
-  const { data: testCases, isLoading: isLoadingTestCases, refetch: refetchTestCases } = useGetTestCasesByRoomQuery(roomId)
-  const { data: submissionData, refetch: refetchSubmissions } = useGetSubmissionsByStudentQuery(undefined, {
-    pollingInterval: 5000, // Poll every 5 seconds
-  })
+  const [runCode, { isLoading: isRunning }] = useRunCodeMutation();
+  const [createSubmission, { isLoading: isSubmitting }] = useCreateSubmissionMutation();
   
-  // Initialize socket connection
+  // Get test cases and submissions
+  const { data: testCases, refetch: refetchTestCases } = useGetTestCasesByRoomQuery(roomId, {
+    pollingInterval: 5000,
+  });
+  
+  const { data: submissions, refetch: refetchSubmissions } = useGetSubmissionsByStudentQuery(roomId, {
+    pollingInterval: 3000,
+  });
+  
+  // Socket connection
   const { 
     isConnected, 
     socket, 
-    connectionAttempts,
-    lastActivity,
     reconnect,
-    emitLanguageChange, 
     emitCodeChange 
-  } = useSocket(roomId)
+  } = useSocket(roomId);
   
-  // Update refs when values change
+  // Update refs when state changes
   useEffect(() => {
-    newTestCasesRef.current = newTestCases
-    selectedTestCaseRef.current = selectedTestCase
-  }, [newTestCases, selectedTestCase])
-
-  // Request notification permissions
+    latestCodeRef.current = code;
+  }, [code]);
+  
   useEffect(() => {
-    if ('Notification' in window && Notification.permission !== 'granted' && Notification.permission !== 'denied') {
-      Notification.requestPermission()
-    }
-  }, [])
-
+    latestInputRef.current = input;
+  }, [input]);
+  
+  useEffect(() => {
+    latestOutputRef.current = output;
+  }, [output]);
+  
+  useEffect(() => {
+    latestLanguageRef.current = language;
+  }, [language]);
+  
+  useEffect(() => {
+    isEditableRef.current = isEditable;
+  }, [isEditable]);
+  
   // Initialize student session
   useEffect(() => {
     if (roomId) {
-      dispatch(setRoomId(roomId))
+      dispatch(setRoomId(roomId));
       
-      // Set session ID for socket identification
       if (!sessionStorage.getItem('sessionId')) {
-        sessionStorage.setItem('sessionId', `student-${roomId}-${Date.now()}`)
+        sessionStorage.setItem('sessionId', `student-${roomId}-${Date.now()}`);
       }
       
-      setIsInitialized(true)
+      setIsInitialized(true);
     }
-  }, [roomId, dispatch])
-
-  // Handle test case selection - with better error handling
-  const handleTestCaseSelect = useCallback((testCase) => {
-    if (!testCase || !testCase.id) {
-      console.error('Invalid test case selected')
-      return
-    }
-
-    setSelectedTestCase(testCase)
-    dispatch(setInput(testCase.input || ''))
-    dispatch(setEditable(false)) // Reset editable state when selecting a new test case
-    dispatch(setTestCase(null))
-    setSuccess(null)
-    setError(null)
-    setStartTime(new Date()) // Start the timer when a test case is selected
-    setElapsedTime(0) // Reset elapsed time
-    
-    // If this is a new test case, remove the new status
-    if (newTestCasesRef.current[testCase.id]) {
-      setNewTestCases(prev => {
-        const updated = { ...prev }
-        delete updated[testCase.id]
-        return updated
-      })
-    }
-    
-    // Switch to broadcast tab when selecting a test case
-    setActiveTab('broadcast')
-    
-    console.log('Test case selected:', testCase.title || testCase.id)
-  }, [dispatch])
-
-  // Enhanced socket event listeners
-  useEffect(() => {
-    if (!isConnected || !socket || !isInitialized) return
-
-    const handleCodeUpdate = ({ code, timestamp }) => {
-      if (!isEditable && code !== undefined) {
-        dispatch(setCode(code))
-        setLastBroadcastReceived(new Date(timestamp || Date.now()).toLocaleTimeString())
-        console.log('Code update received from teacher')
-      }
-    }
-
-    const handleOutputUpdate = ({ output, timestamp }) => {
-      if (output !== undefined) {
-        dispatch(setOutput(output))
-        setLastBroadcastReceived(new Date(timestamp || Date.now()).toLocaleTimeString())
-        console.log('Output update received from teacher')
-      }
-    }
-    
-    const handleLanguageUpdate = ({ language, timestamp }) => {
-      if (language !== undefined) {
-        dispatch(setLanguage(language))
-        setLastBroadcastReceived(new Date(timestamp || Date.now()).toLocaleTimeString())
-        console.log('Language update received from teacher:', language)
-      }
-    }
-
-    const handleInputUpdate = ({ input, timestamp }) => {
-      if (input !== undefined) {
-        dispatch(setInput(input))
-        setLastBroadcastReceived(new Date(timestamp || Date.now()).toLocaleTimeString())
-        console.log('Input update received from teacher')
-      }
-    }
-
-    const handleTestCaseCreated = ({ testCase, timestamp }) => {
-      console.log('New test case received:', testCase)
-      
-      if (testCase && testCase.id) {
-        // Refetch test cases
-        refetchTestCases().then(() => {
-          // Automatically select the new test case
-          handleTestCaseSelect(testCase)
-          
-          // Show success message
-          setSuccess(`New test case published: ${testCase.title || 'Untitled Test Case'}`)
-          
-          // Play notification sound (if available)
-          try {
-            const audio = new Audio('/notification.mp3')
-            audio.volume = 0.5
-            audio.play().catch(() => {
-              // Ignore audio errors (file might not exist)
-            })
-          } catch (e) {
-            // Ignore audio errors
-          }
-          
-          // Mark this test case as new
-          setNewTestCases(prev => ({
-            ...prev,
-            [testCase.id]: true
-          }))
-          
-          // Show browser notification
-          if ('Notification' in window && Notification.permission === 'granted') {
-            new Notification('New Test Case Available!', {
-              body: `${testCase.title || 'Untitled Test Case'} has been published`,
-              icon: '/favicon.ico',
-              tag: 'test-case-' + testCase.id
-            })
-          }
-          
-          // Clear success message after 5 seconds
-          setTimeout(() => setSuccess(null), 5000)
-          
-          // Remove the 'new' status after 30 seconds
-          setTimeout(() => {
-            setNewTestCases(prev => {
-              const updated = { ...prev }
-              delete updated[testCase.id]
-              return updated
-            })
-          }, 30000)
-        })
-      }
-    }
-
-    // Set up socket event listeners
-    socket.on('code-update', handleCodeUpdate)
-    socket.on('output-update', handleOutputUpdate)
-    socket.on('language-update', handleLanguageUpdate)
-    socket.on('input-update', handleInputUpdate)
-    socket.on('test-case-created', handleTestCaseCreated)
-
-    // Cleanup function
-    return () => {
-      socket.off('code-update', handleCodeUpdate)
-      socket.off('output-update', handleOutputUpdate)
-      socket.off('language-update', handleLanguageUpdate)
-      socket.off('input-update', handleInputUpdate)
-      socket.off('test-case-created', handleTestCaseCreated)
-    }
-  }, [isConnected, socket, dispatch, isEditable, isInitialized, refetchTestCases, handleTestCaseSelect])
-
-  // Listen for custom test case events (fallback)
-  useEffect(() => {
-    const handleTestCaseCreated = (event) => {
-      const testCase = event.detail
-      if (testCase && testCase.id) {
-        console.log('Test case event received:', testCase)
-        refetchTestCases()
-      }
-    }
-    
-    window.addEventListener('test-case-created', handleTestCaseCreated)
-    
-    return () => {
-      window.removeEventListener('test-case-created', handleTestCaseCreated)
-    }
-  }, [refetchTestCases])
+  }, [roomId, dispatch]);
   
-  // Refetch submissions when a new submission is made
+  // Request sync when connected and initialized
   useEffect(() => {
-    if (success && success.includes('solution')) {
-      refetchSubmissions()
+    if (isConnected && socket && isInitialized && !isEditable) {
+      console.log('Requesting sync for room:', roomId);
+      socket.emit('request-sync', { roomId });
     }
-  }, [success, refetchSubmissions])
+  }, [isConnected, socket, roomId, isInitialized, isEditable]);
   
-  // Timer for tracking time spent on a test case
+  // Socket event listeners
   useEffect(() => {
-    let timerId;
-    
-    if (startTime && isEditable) {
-      timerId = setInterval(() => {
-        const now = new Date();
-        const elapsed = Math.floor((now - startTime) / 1000);
-        setElapsedTime(elapsed);
-      }, 1000);
-    } else if (!isEditable) {
-      setStartTime(null);
-      setElapsedTime(0);
-    }
-    
-    return () => {
-      if (timerId) clearInterval(timerId);
+    if (!isConnected || !socket) return;
+
+    const handleCodeUpdate = ({ code: newCode }) => {
+      console.log('Received code update:', newCode);
+      if (!isEditableRef.current && newCode !== undefined) {
+        dispatch(setCode(newCode));
+      }
     };
+
+    const handleOutputUpdate = ({ output: newOutput }) => {
+      console.log('Received output update:', newOutput);
+      if (newOutput !== undefined) {
+        dispatch(setOutput(newOutput));
+      }
+    };
+    
+    const handleLanguageUpdate = ({ language: newLanguage }) => {
+      console.log('Received language update:', newLanguage);
+      if (newLanguage !== undefined) {
+        dispatch(setLanguage(newLanguage));
+      }
+    };
+
+    const handleInputUpdate = ({ input: newInput }) => {
+      console.log('Received input update:', newInput);
+      if (newInput !== undefined) {
+        dispatch(setInput(newInput));
+      }
+    };
+
+    const handleTestCaseCreated = ({ testCase }) => {
+      if (testCase && testCase.id) {
+        refetchTestCases();
+        setSuccess(`New test case: ${testCase.title}`);
+        setNewTestCases(prev => ({ ...prev, [testCase.id]: true }));
+        
+        // Auto-select if no test case selected
+        if (!selectedTestCase) {
+          handleTestCaseSelect(testCase);
+        }
+        
+        setTimeout(() => setSuccess(null), 3000);
+        setTimeout(() => {
+          setNewTestCases(prev => {
+            const updated = { ...prev };
+            delete updated[testCase.id];
+            return updated;
+          });
+        }, 10000);
+      }
+    };
+
+    const handleSyncState = ({ code: syncCode, input: syncInput, output: syncOutput, language: syncLanguage }) => {
+      console.log('Received sync state:', { syncCode, syncInput, syncOutput, syncLanguage });
+      
+      // Only update if not in editable mode
+      if (!isEditableRef.current) {
+        if (syncCode !== undefined) dispatch(setCode(syncCode));
+        if (syncInput !== undefined) dispatch(setInput(syncInput));
+        if (syncOutput !== undefined) dispatch(setOutput(syncOutput));
+        if (syncLanguage !== undefined) dispatch(setLanguage(syncLanguage));
+      }
+    };
+
+    // Register all event listeners
+    socket.on('code-update', handleCodeUpdate);
+    socket.on('output-update', handleOutputUpdate);
+    socket.on('language-update', handleLanguageUpdate);
+    socket.on('input-update', handleInputUpdate);
+    socket.on('test-case-created', handleTestCaseCreated);
+    socket.on('sync-state', handleSyncState);
+
+    console.log('Socket event listeners registered');
+
+    return () => {
+      socket.off('code-update', handleCodeUpdate);
+      socket.off('output-update', handleOutputUpdate);
+      socket.off('language-update', handleLanguageUpdate);
+      socket.off('input-update', handleInputUpdate);
+      socket.off('test-case-created', handleTestCaseCreated);
+      socket.off('sync-state', handleSyncState);
+      console.log('Socket event listeners cleaned up');
+    };
+  }, [isConnected, socket, dispatch, selectedTestCase, refetchTestCases]);
+  
+  // Timer
+  useEffect(() => {
+    let timer;
+    if (startTime && isEditable) {
+      timer = setInterval(() => {
+        setElapsedTime(Math.floor((new Date() - startTime) / 1000));
+      }, 1000);
+    }
+    return () => timer && clearInterval(timer);
   }, [startTime, isEditable]);
-
-  // Handle code change for teacher's broadcast code
-  const handleCodeChange = useCallback((value) => {
-    dispatch(setCode(value))
-  }, [dispatch])
-
-  // Handle code change for student's editable code
-  const handleStudentCodeChange = useCallback((value) => {
-    setStudentCode(value)
-    // Only emit code changes when in editable mode
-    if (isEditable && isConnected) {
-      emitCodeChange(value)
-    }
-  }, [isEditable, isConnected, emitCodeChange])
-
-  // Handle language change
-  const handleLanguageChange = useCallback((value) => {
-    dispatch(setLanguage(value))
-    if (isEditable && isConnected) {
-      emitLanguageChange(value)
-    }
-  }, [dispatch, isEditable, isConnected, emitLanguageChange])
-
-  // Enable editing (Solve button)
+  
+  // Handle test case selection
+  const handleTestCaseSelect = useCallback((testCase) => {
+    setSelectedTestCase(testCase);
+    dispatch(setInput(testCase.input || ''));
+    setActiveTab('broadcast');
+    
+    // Remove new status
+    setNewTestCases(prev => {
+      const updated = { ...prev };
+      delete updated[testCase.id];
+      return updated;
+    });
+  }, [dispatch]);
+  
+  // Start solving
   const handleSolve = useCallback(() => {
     if (!selectedTestCase) {
-      setError('Please select a test case first')
-      return
+      setError('Please select a test case first');
+      return;
     }
     
-    dispatch(setEditable(true))
-    dispatch(setTestCase(selectedTestCase))
-    setSuccess('You can now edit the code and submit your solution')
+    dispatch(setEditable(true));
+    dispatch(setTestCase(selectedTestCase));
+    setStudentCode(code || `// Solve: ${selectedTestCase.title}\n// Your code here\n`);
+    setStudentOutput(''); // Clear previous student output
+    setStartTime(new Date());
+    setElapsedTime(0);
+    setActiveTab('solve');
+    setSuccess('You can now edit and submit your solution');
+  }, [selectedTestCase, dispatch, code]);
+  
+  // Handle tab change with sync request
+  const handleTabChange = useCallback((tab) => {
+    setActiveTab(tab);
     
-    // Initialize student code with teacher's code or default template
-    setStudentCode(code || '// Write your solution here')
+    // If switching to broadcast tab and not editable, request sync
+    if (tab === 'broadcast' && !isEditable && isConnected && socket) {
+      console.log('Tab changed to broadcast, requesting sync');
+      socket.emit('request-sync', { roomId });
+    }
+  }, [isEditable, isConnected, socket, roomId]);
+  
+  // Handle student code change
+  const handleStudentCodeChange = useCallback((value) => {
+    setStudentCode(value);
+  }, []);
+  
+  // Helper function to get valid language ID
+  const getValidLanguageId = (languageValue) => {
+    // Handle different language value formats
+    let languageId;
     
-    // Start the timer when student begins solving
-    setStartTime(new Date())
-    setElapsedTime(0)
+    if (typeof languageValue === 'number') {
+      languageId = languageValue;
+    } else if (typeof languageValue === 'string') {
+      // Try to parse as number
+      const parsed = parseInt(languageValue, 10);
+      if (!isNaN(parsed)) {
+        languageId = parsed;
+      } else {
+        // Handle string language names - map to common language IDs
+        const languageMap = {
+          'javascript': 63,
+          'python': 71,
+          'java': 62,
+          'cpp': 54,
+          'c': 50,
+          'csharp': 51,
+          'php': 68,
+          'ruby': 72,
+          'go': 60,
+          'rust': 73,
+          'kotlin': 78,
+          'swift': 83,
+          'typescript': 74,
+          'scala': 81,
+          'perl': 85,
+          'r': 80,
+          'dart': 90,
+          'elixir': 57,
+          'haskell': 61,
+          'lua': 64,
+          'objectivec': 79,
+          'sql': 82,
+          'bash': 46,
+          'clojure': 86,
+          'cobol': 77,
+          'erlang': 58,
+          'fortran': 59,
+          'groovy': 88,
+          'julia': 79,
+          'lisp': 55,
+          'matlab': 70,
+          'ocaml': 65,
+          'pascal': 67,
+          'prolog': 69,
+          'vb': 84
+        };
+        
+        languageId = languageMap[languageValue.toLowerCase()];
+      }
+    }
     
-    // Switch to the solve tab
-    setActiveTab('solve')
+    // Default to JavaScript if no valid language found
+    if (!languageId || isNaN(languageId) || languageId <= 0) {
+      console.warn('Invalid language, defaulting to JavaScript (63):', languageValue);
+      languageId = 63; // JavaScript
+    }
     
-    console.log('Started solving test case:', selectedTestCase.title || selectedTestCase.id)
-  }, [selectedTestCase, dispatch, code])
-
-  // Run code
+    return languageId;
+  };
+  
+  // Run student code
   const handleRunCode = async () => {
     if (!studentCode.trim()) {
-      setError('Please write some code first')
-      return
+      setError('Please write some code first');
+      return;
     }
     
-    setError(null)
-    setSuccess(null)
+    setError(null);
+    setStudentOutput('Running code...');
     
     try {
-      const result = await runCode({
-        language_id: language,
-        source_code: studentCode,
-        stdin: input,
-      }).unwrap()
+      // Get valid language ID with fallback
+      const languageId = getValidLanguageId(language);
       
-      const outputText = result.stdout || result.stderr || 'No output'
-      dispatch(setOutput(outputText))
-      console.log('Code executed successfully')
+      console.log('Language validation:', {
+        original: language,
+        type: typeof language,
+        converted: languageId
+      });
+
+      // Get the test case input
+      const testInput = selectedTestCase?.input || '';
+      
+      console.log('Running code with:', {
+        language_id: languageId,
+        source_code: studentCode,
+        stdin: testInput,
+      });
+
+      const result = await runCode({
+        language_id: languageId,
+        source_code: studentCode,
+        stdin: testInput,
+      }).unwrap();
+      
+      console.log('Code execution result:', result);
+      
+      // Handle the response
+      let outputText = '';
+      
+      if (result.stdout) {
+        outputText = result.stdout;
+      } else if (result.stderr) {
+        outputText = `Error: ${result.stderr}`;
+      } else if (result.compile_output) {
+        outputText = `Compilation Error: ${result.compile_output}`;
+      } else if (result.message) {
+        outputText = `System: ${result.message}`;
+      } else {
+        outputText = 'No output';
+      }
+      
+      setStudentOutput(outputText);
+      
+      // Check if matches expected output
+      if (selectedTestCase && selectedTestCase.expectedOutput) {
+        const actualOutput = outputText.trim();
+        const expectedOutput = selectedTestCase.expectedOutput.trim();
+        
+        if (actualOutput === expectedOutput) {
+          setSuccess('✅ Output matches! You can submit your solution.');
+        } else {
+          setSuccess('⚠️ Output doesn\'t match expected result. Keep trying!');
+          console.log('Output mismatch:', {
+            expected: expectedOutput,
+            actual: actualOutput
+          });
+        }
+      } else {
+        setSuccess('Code executed successfully!');
+      }
+      
     } catch (err) {
-      console.error('Run code error:', err)
-      setError(`Failed to run code: ${err?.data?.message || 'Please try again.'}`)
+      console.error('Code execution error:', err);
+      
+      let errorMessage = 'Failed to run code';
+      
+      if (err?.data?.message) {
+        errorMessage = err.data.message;
+      } else if (err?.data?.error) {
+        errorMessage = err.data.error;
+      } else if (err?.message) {
+        errorMessage = err.message;
+      } else if (err?.status === 500) {
+        errorMessage = 'Server error - please try again';
+      } else if (err?.status === 400) {
+        errorMessage = 'Invalid request - check your code and language selection';
+      } else if (err?.status) {
+        errorMessage = `Request failed with status ${err.status}`;
+      }
+      
+      setStudentOutput(`Error: ${errorMessage}`);
+      setError(`Failed to run code: ${errorMessage}`);
     }
-  }
+  };
 
   // Submit solution
   const handleSubmit = async () => {
-    if (!studentCode.trim()) {
-      setError('Please write some code first')
-      return
+    if (!studentCode.trim() || !testCase) {
+      setError('Please write code and select a test case');
+      return;
     }
     
-    setError(null)
-    setSuccess(null)
-    
-    if (!testCase) {
-      setError('No test case selected')
-      return
-    }
-    
-    // Calculate time taken to solve this test case
-    const timeTaken = startTime ? Math.floor((new Date() - startTime) / 1000) : 0
+    const timeTaken = startTime ? Math.floor((new Date() - startTime) / 1000) : 0;
     
     try {
+      // Use the same language validation for submission
+      const validLanguageId = getValidLanguageId(language);
+      
       const result = await createSubmission({
         testCaseId: testCase.id,
         code: studentCode,
-        language,
-        timeTaken: timeTaken,
-      }).unwrap()
+        language: validLanguageId, // Use validated language ID
+        timeTaken,
+      }).unwrap();
       
-      const status = result.submission?.status || 'Unknown'
+      const status = result.submission?.status || 'Unknown';
       
       if (status === 'Solved') {
-        setSuccess('🎉 Congratulations! Your solution is correct.')
-        setShowConfetti(true)
-        setTimeout(() => setShowConfetti(false), 5000)
-        
-        // Emit submission status to teacher
+        setSuccess('🎉 Correct solution! Submitted!');
+        // Emit to teacher
         if (socket && socket.connected) {
-          socket.emit('submission-status', { 
+          socket.emit('student-submission-update', { 
             roomId, 
-            status,
+            status: 'solved',
             testCaseId: testCase.id,
-            timeTaken
-          })
+            testCaseTitle: testCase.title,
+            studentName: 'Student', // Add student name if available
+            timeTaken,
+            submissionId: result.submission.id
+          });
         }
+        // Reset state
+        dispatch(setEditable(false));
+        dispatch(setTestCase(null));
+        setStudentOutput(''); // Clear student output
+        setStartTime(null);
+        setElapsedTime(0);
+        setActiveTab('broadcast');
+        refetchSubmissions();
         
-        // Refetch submissions to update stats
-        refetchSubmissions().then(response => {
-          const data = response.data
-          if (data && data.totalSolved === data.totalActive && data.totalActive > 0) {
-            setSuccess('🏆 Amazing! You have solved all test cases! 🏆')
-            setShowConfetti(true)
-            setShowAchievement(true)
-            setTimeout(() => setShowConfetti(false), 8000)
-            setTimeout(() => setShowAchievement(false), 10000)
-          }
-        })
+        // Request sync after switching back to broadcast
+        if (isConnected && socket) {
+          setTimeout(() => {
+            socket.emit('request-sync', { roomId });
+          }, 500);
+        }
       } else {
-        setSuccess('❌ Your solution is incorrect. Please try again.')
+        setSuccess('❌ Incorrect solution. Submitted! Try again!');
+        // Emit failed attempt
+        if (socket && socket.connected) {
+          socket.emit('student-submission-update', { 
+            roomId, 
+            status: 'failed',
+            testCaseId: testCase.id,
+            testCaseTitle: testCase.title,
+            timeTaken,
+            submissionId: result.submission.id
+          });
+        }
       }
       
-      console.log('Submission result:', status)
-      
     } catch (err) {
-      console.error('Submission error:', err)
-      setError(err?.data?.message || 'Failed to submit solution')
+      console.error('Submission error:', err);
+      setError(err?.data?.message || 'Failed to submit solution');
     }
-  }
+  };
 
-  // Connection status helpers
-  const getConnectionStatusColor = () => {
-    if (isConnected) return 'bg-green-500'
-    if (connectionAttempts > 0) return 'bg-yellow-500'
-    return 'bg-red-500'
-  }
+  // Get solved test case IDs from submissions
+  const getSolvedTestCaseIds = () => {
+    if (!submissions || !Array.isArray(submissions)) return new Set();
+    return new Set(
+      submissions
+        .filter(submission => submission.status === 'Solved')
+        .map(submission => submission.testCaseId)
+    );
+  };
 
-  const getConnectionStatusText = () => {
-    if (isConnected) return 'Connected'
-    if (connectionAttempts > 0) return `Reconnecting... (${connectionAttempts})`
-    return 'Disconnected'
-  }
+  const solvedTestCaseIds = getSolvedTestCaseIds();
+
+  // Calculate statistics
+  const getStatistics = () => {
+    if (!submissions || !Array.isArray(submissions)) {
+      return { totalActive: testCases?.length || 0, totalAttempted: 0, totalSolved: 0 };
+    }
+
+    const uniqueTestCases = new Set(submissions.map(s => s.testCaseId));
+    const solvedTestCases = new Set(
+      submissions.filter(s => s.status === 'Solved').map(s => s.testCaseId)
+    );
+
+    return {
+      totalActive: testCases?.length || 0,
+      totalAttempted: uniqueTestCases.size,
+      totalSolved: solvedTestCases.size
+    };
+  };
+
+  const statistics = getStatistics();
+
+  // Determine which output to show
+  const getCurrentOutput = () => {
+    if (activeTab === 'solve' && isEditable) {
+      return studentOutput;
+    }
+    return output; // Teacher's broadcast output
+  };
 
   return (
-      <div className="container mx-auto px-4 py-3">
-        {showConfetti && <Confetti width={window.innerWidth} height={window.innerHeight} recycle={false} />}
-        
-        {/* Achievement Notification */}
-        {showAchievement && (
-          <div className="fixed inset-0 flex items-center justify-center z-50 pointer-events-none">
-            <div className="bg-white rounded-lg shadow-xl p-6 border-4 border-yellow-500 animate-bounce pointer-events-auto max-w-md">
-              <div className="text-center">
-                <div className="text-5xl mb-2">🏆</div>
-                <h2 className="text-2xl font-bold text-yellow-600 mb-2">Achievement Unlocked!</h2>
-                <p className="text-lg font-semibold">Master Problem Solver</p>
-                <p className="text-gray-600 mt-2">You've solved all the test cases in this room!</p>
+    <div className="container mx-auto px-4 py-3">
+      <div className="mb-4">
+        <div className="flex items-center flex-wrap gap-2">
+          <span className="bg-blue-600 text-white rounded-md px-3 py-2">
+            Student Room: {roomId}
+          </span>
+          
+          {/* Connection Status */}
+          <div className="flex items-center gap-2">
+            <div className={`w-3 h-3 rounded-full ${isConnected ? 'bg-green-500' : 'bg-red-500'}`}></div>
+            <span className="text-sm">{isConnected ? 'Connected' : 'Disconnected'}</span>
+            {!isConnected && (
+              <button
+                onClick={reconnect}
+                className="text-xs bg-blue-500 text-white px-2 py-1 rounded hover:bg-blue-600"
+              >
+                Reconnect
+              </button>
+            )}
+          </div>
+
+          {/* Timer */}
+          {isEditable && startTime && (
+            <div className="text-xs bg-green-100 px-2 py-1 rounded flex items-center">
+              <span>⏱️ {Math.floor(elapsedTime / 60)}:{(elapsedTime % 60).toString().padStart(2, '0')}</span>
+            </div>
+          )}
+          
+          <div className="ml-auto flex items-center gap-2">
+            <LanguageSelector
+              value={language}
+              onChange={(value) => dispatch(setLanguage(value))}
+              disabled={!isEditable}
+            />
+            <button
+              onClick={() => navigate('/student')}
+              className="text-xs bg-red-500 text-white px-3 py-1 rounded hover:bg-red-600"
+            >
+              Leave Room
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Alerts */}
+      {error && (
+        <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mb-4">
+          {error}
+          <button onClick={() => setError(null)} className="float-right">&times;</button>
+        </div>
+      )}
+
+      {success && (
+        <div className="bg-green-100 border border-green-400 text-green-700 px-4 py-3 rounded mb-4">
+          {success}
+          <button onClick={() => setSuccess(null)} className="float-right">&times;</button>
+        </div>
+      )}
+
+      <div className="flex flex-wrap -mx-2">
+        {/* Left Side - Code Editor */}
+        <div className="w-full lg:w-2/3 px-2">
+          {/* Tab Navigation */}
+          <div className="mb-4">
+            <div className="border-b border-gray-200">
+              <nav className="-mb-px flex">
+                <button
+                  className={`py-2 px-4 border-b-2 font-medium text-sm ${
+                    activeTab === 'broadcast' 
+                      ? 'border-blue-500 text-blue-600' 
+                      : 'border-transparent text-gray-500 hover:text-gray-700'
+                  }`}
+                  onClick={() => handleTabChange('broadcast')}
+                >
+                  Teacher's Code {!isConnected && '(Offline)'}
+                </button>
+                <button
+                  className={`py-2 px-4 border-b-2 font-medium text-sm ${
+                    activeTab === 'solve' 
+                      ? 'border-blue-500 text-blue-600' 
+                      : 'border-transparent text-gray-500 hover:text-gray-700'
+                  }`}
+                  onClick={() => handleTabChange('solve')}
+                  disabled={!isEditable}
+                >
+                  Your Solution {isEditable ? '✓' : '🔒'}
+                </button>
+              </nav>
+            </div>
+            
+            {/* Code Editor */}
+            <div className="border border-gray-200 rounded-lg shadow-sm mt-4">
+              <div className="bg-gray-100 py-2 px-4 flex justify-between items-center">
+                <span>
+                  {activeTab === 'broadcast' ? "Teacher's Code (Read-Only)" : "Your Solution"}
+                </span>
+                <div className="flex items-center gap-2">
+                  {activeTab === 'broadcast' && (
+                    <span className={`text-xs px-2 py-1 rounded text-white ${
+                      isConnected ? 'bg-green-500' : 'bg-red-500'
+                    }`}>
+                      {isConnected ? 'Live' : 'Offline'}
+                    </span>
+                  )}
+                  {activeTab === 'solve' && testCase && (
+                    <span className="bg-purple-500 text-white text-xs px-2 py-1 rounded">
+                      Solving: {testCase.title}
+                    </span>
+                  )}
+                </div>
               </div>
+              <CodeEditor
+                value={activeTab === 'broadcast' ? code : studentCode}
+                onChange={activeTab === 'broadcast' ? () => {} : handleStudentCodeChange}
+                language={language}
+                readOnly={activeTab === 'broadcast'}
+                height="400px"
+              />
             </div>
           </div>
-        )}
-        
-        <div className="mb-2">
-          <div className="flex items-center flex-wrap gap-2">
-            <span className="bg-blue-600 text-white rounded-md px-3 py-2">
-              Live Room: {roomId}
-            </span>
-            
-            {/* Connection Status */}
-            <div className="flex items-center">
-              <span className="mr-1 text-sm">Status:</span>
-              <div className={`w-3 h-3 rounded-full mr-1 ${getConnectionStatusColor()}`}></div>
-              <span className="text-sm">{getConnectionStatusText()}</span>
-              {!isConnected && (
+
+          {/* Test Case Information */}
+          <div className="border border-gray-200 rounded-lg shadow-sm mb-4">
+            <div className="bg-gray-100 py-2 px-4 flex justify-between items-center">
+              <span>Test Case Information</span>
+              {!isEditable && selectedTestCase && (
                 <button
-                  onClick={reconnect}
-                  className="ml-2 text-xs bg-blue-500 text-white px-2 py-1 rounded hover:bg-blue-600"
+                  className="bg-green-500 hover:bg-green-600 text-white text-xs px-3 py-1 rounded"
+                  onClick={handleSolve}
                 >
-                  Reconnect
+                  Start Solving
                 </button>
               )}
             </div>
+            <div className="p-4">
+              {selectedTestCase ? (
+                <>
+                  <h6 className="font-medium mb-2">Challenge: {selectedTestCase.title}</h6>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-3">
+                    <div>
+                      <label className="block text-sm font-medium mb-1">Input:</label>
+                      <textarea
+                        rows={3}
+                        value={selectedTestCase.input || ''}
+                        readOnly
+                        className="w-full px-3 py-2 border border-gray-300 rounded bg-gray-50 text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium mb-1">Expected Output:</label>
+                      <textarea
+                        rows={3}
+                        value={selectedTestCase.expectedOutput || ''}
+                        readOnly
+                        className="w-full px-3 py-2 border border-gray-300 rounded bg-gray-50 text-sm"
+                      />
+                    </div>
+                  </div>
+                  
+                  {isEditable && activeTab === 'solve' && (
+                    <div className="flex justify-between items-center">
+                      <div className="text-sm text-gray-600">
+                        {startTime && `Time: ${Math.floor(elapsedTime / 60)}:${(elapsedTime % 60).toString().padStart(2, '0')}`}
+                      </div>
+                      <div className="flex gap-2">
+                        <button
+                          onClick={handleRunCode}
+                          disabled={isRunning || !studentCode.trim()}
+                          className="bg-yellow-500 hover:bg-yellow-600 text-white px-4 py-2 rounded disabled:bg-yellow-300 disabled:cursor-not-allowed"
+                        >
+                          {isRunning ? 'Running...' : 'Test Code'}
+                        </button>
+                        <button
+                          onClick={handleSubmit}
+                          disabled={isSubmitting || !studentCode.trim()}
+                          className="bg-green-500 hover:bg-green-600 text-white px-4 py-2 rounded disabled:bg-green-300 disabled:cursor-not-allowed"
+                        >
+                          {isSubmitting ? 'Submitting...' : 'Submit'}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </>
+              ) : (
+                <div className="text-center py-4 text-gray-500">
+                  <p>Select a test case to get started</p>
+                  <p className="text-sm mt-1">Choose from the available test cases on the right</p>
+                </div>
+              )}
+            </div>
+          </div>
 
-            {/* Last Broadcast Received */}
-            {lastBroadcastReceived && (
-              <div className="text-xs text-gray-500 bg-gray-100 rounded px-2 py-1">
-                Last update: {lastBroadcastReceived}
-              </div>
-            )}
-
-            {/* Last Activity */}
-            {lastActivity && (
-              <div className="text-xs text-gray-500">
-                Activity: {lastActivity}
-              </div>
-            )}
-            
-            <div className="ml-auto">
-              <LanguageSelector
-                value={language}
-                onChange={handleLanguageChange}
-                disabled={!isEditable}
+          {/* Output */}
+          <div className="border border-gray-200 rounded-lg shadow-sm">
+            <div className="bg-gray-100 py-2 px-4 flex justify-between items-center">
+              <span className="text-gray-600">Output</span>
+              {activeTab === 'broadcast' && (
+                <span className="text-xs text-gray-500">Teacher's Output</span>
+              )}
+              {activeTab === 'solve' && (
+                <span className="text-xs text-gray-500">Your Code Output</span>
+              )}
+            </div>
+            <div className="p-4">
+              <textarea
+                rows={4}
+                value={getCurrentOutput()}
+                readOnly
+                className="w-full px-3 py-2 border border-gray-300 rounded bg-gray-50 text-sm font-mono"
+                placeholder="Output will appear here after running code"
               />
+              {selectedTestCase && activeTab === 'solve' && studentOutput && (
+                <div className="mt-2 text-xs">
+                  <div className="flex justify-between items-center">
+                    <span className="text-gray-600">Expected vs Actual:</span>
+                    <span className={`font-medium ${
+                      studentOutput.trim() === selectedTestCase.expectedOutput.trim() 
+                        ? 'text-green-600' 
+                        : 'text-red-600'
+                    }`}>
+                      {studentOutput.trim() === selectedTestCase.expectedOutput.trim() ? 'MATCH ✓' : 'NO MATCH ✗'}
+                    </span>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         </div>
 
-        {/* Connection Warning */}
-        {!isConnected && (
-          <div className="bg-yellow-100 border border-yellow-400 text-yellow-700 px-4 py-3 rounded relative mb-4" role="alert">
-            <div className="flex justify-between items-center">
-              <span>⚠️ Not connected to live session. You won't receive real-time updates from teacher.</span>
-              <button
-                onClick={reconnect}
-                className="bg-yellow-500 text-white px-3 py-1 rounded hover:bg-yellow-600"
-              >
-                Retry Connection
-              </button>
+        {/* Right Side - Progress & Test Cases */}
+        <div className="w-full lg:w-1/3 px-2">
+          {/* Progress */}
+          <div className="border border-gray-200 rounded-lg shadow-sm mb-4">
+            <div className="bg-gray-100 py-2 px-4">
+              <span className="text-gray-600">Your Progress</span>
             </div>
-          </div>
-        )}
-
-        <div>
-          {error && (
-            <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded relative mb-4" role="alert">
-              <span className="block sm:inline">{error}</span>
-              <button 
-                className="absolute top-0 bottom-0 right-0 px-4 py-3" 
-                onClick={() => setError(null)}
-              >
-                <svg className="fill-current h-6 w-6 text-red-500" role="button" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20">
-                  <title>Close</title>
-                  <path d="M14.348 14.849a1.2 1.2 0 0 1-1.697 0L10 11.819l-2.651 3.029a1.2 1.2 0 1 1-1.697-1.697l2.758-3.15-2.759-3.152a1.2 1.2 0 1 1 1.697-1.697L10 8.183l2.651-3.031a1.2 1.2 0 1 1 1.697 1.697l-2.758 3.152 2.758 3.15a1.2 1.2 0 0 1 0 1.698z"/>
-                </svg>
-              </button>
-            </div>
-          )}
-          {success && (
-            <div className="bg-green-100 border border-green-400 text-green-700 px-4 py-3 rounded relative mb-4" role="alert">
-              <span className="block sm:inline">{success}</span>
-              <button 
-                className="absolute top-0 bottom-0 right-0 px-4 py-3" 
-                onClick={() => setSuccess(null)}
-              >
-                <svg className="fill-current h-6 w-6 text-green-500" role="button" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20">
-                  <title>Close</title>
-                  <path d="M14.348 14.849a1.2 1.2 0 0 1-1.697 0L10 11.819l-2.651 3.029a1.2 1.2 0 1 1-1.697-1.697l2.758-3.15-2.759-3.152a1.2 1.2 0 1 1 1.697-1.697L10 8.183l2.651-3.031a1.2 1.2 0 1 1 1.697 1.697l-2.758 3.152 2.758 3.15a1.2 1.2 0 0 1 0 1.698z"/>
-                </svg>
-              </button>
-            </div>
-          )}
-
-          <div className="flex flex-wrap -mx-2">
-            <div className="w-full lg:w-2/3 px-2">
-              <div className="mb-4">
-                <div className="border-b border-gray-200">
-                  <nav className="-mb-px flex">
-                    <button
-                      className={`py-2 px-4 border-b-2 font-medium text-sm ${activeTab === 'broadcast' ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'}`}
-                      onClick={() => setActiveTab('broadcast')}
-                    >
-                      Teacher's Broadcast {!isConnected && '(Offline)'}
-                    </button>
-                    <button
-                      className={`py-2 px-4 border-b-2 font-medium text-sm ${activeTab === 'solve' ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'}`}
-                      onClick={() => setActiveTab('solve')}
-                      disabled={!isEditable}
-                    >
-                      Solve Challenge {isEditable ? '✓' : ''}
-                    </button>
-                  </nav>
+            <div className="p-4">
+              <div className="grid grid-cols-3 gap-2 mb-3">
+                <div className="bg-blue-50 p-3 rounded text-center">
+                  <div className="text-xl font-bold text-blue-600">{statistics.totalActive}</div>
+                  <div className="text-xs text-gray-600">Active</div>
                 </div>
-                
-                {activeTab === 'broadcast' && (
-                  <div className="border border-gray-200 rounded-lg shadow-sm mb-4 mt-4">
-                    <div className="bg-gray-100 py-2 px-4 flex justify-between items-center">
-                      <span>Teacher's Code (Read-Only)</span>
-                      <div className="flex items-center gap-2">
-                        <span className={`text-xs px-2 py-1 rounded text-white ${isConnected ? 'bg-green-500' : 'bg-red-500'}`}>
-                          {isConnected ? 'Live' : 'Offline'}
-                        </span>
-                        {selectedTestCase && (
-                          <span className="bg-blue-500 text-white text-xs px-2 py-1 rounded">
-                            {selectedTestCase.title || 'Test Case Selected'}
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                    <div className="p-0">
-                      <CodeEditor
-                        value={code}
-                        onChange={handleCodeChange}
-                        language={language}
-                        readOnly={true}
-                        height="400px"
-                      />
-                    </div>
-                  </div>
-                )}
-                
-                {activeTab === 'solve' && (
-                  <div className="border border-gray-200 rounded-lg shadow-sm mb-4 mt-4">
-                    <div className="bg-gray-100 py-2 px-4 flex justify-between items-center">
-                      <span>Your Solution</span>
-                      <div className="flex items-center gap-2">
-                        <span className="bg-green-500 text-white text-xs px-2 py-1 rounded">Editing Mode</span>
-                        {testCase && (
-                          <span className="bg-purple-500 text-white text-xs px-2 py-1 rounded">
-                            Solving: {testCase.title || 'Test Case'}
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                    <div className="p-0">
-                      <CodeEditor
-                        value={studentCode}
-                        onChange={handleStudentCodeChange}
-                        language={language}
-                        readOnly={false}
-                        height="400px"
-                      />
-                    </div>
-                  </div>
-                )}
-
-                <div className="mb-4">
-                  <div className="border border-gray-200 rounded-lg shadow-sm">
-                    <div className="bg-gray-100 py-2 px-4 flex justify-between items-center">
-                      <span>Test Case Information</span>
-                      {!isEditable && selectedTestCase && (
-                        <button
-                          className="bg-green-500 hover:bg-green-600 text-white text-xs px-3 py-1 rounded-full"
-                          onClick={handleSolve}
-                          disabled={!selectedTestCase}
-                        >
-                          Solve This Challenge
-                        </button>
-                      )}
-                    </div>
-                    <div className="p-4">
-                      {selectedTestCase ? (
-                        <>
-                          <div className="mb-3">
-                            <label className="block font-medium mb-1">Expected Output:</label>
-                            <textarea
-                              rows={3}
-                              value={selectedTestCase?.expectedOutput || ''}
-                              readOnly
-                              className="w-full px-3 py-2 border border-gray-300 rounded-md bg-gray-50"
-                            />
-                          </div>
-                          {testCase ? (
-                            <div className="text-center">
-                              <span className="bg-green-500 text-white px-3 py-1 rounded-md mb-2 inline-block">You are solving this challenge</span>
-                              {activeTab === 'broadcast' && (
-                                <div className="mt-2">
-                                  <p className="mb-1">Switch to the "Solve Challenge" tab to edit your solution</p>
-                                </div>
-                              )}
-                            </div>
-                          ) : (
-                            <div className="text-center">
-                              <p className="mb-1">Click "Solve This Challenge" to start coding your solution</p>
-                            </div>
-                          )}
-                        </>
-                      ) : (
-                        <div className="text-center py-3">
-                          <p className="mb-1">Select a test case from the right panel</p>
-                          <p className="text-gray-500 text-sm">or wait for the teacher to publish new test cases</p>
-                        </div>
-                      )}
-                    </div>
-                  </div>
+                <div className="bg-yellow-50 p-3 rounded text-center">
+                  <div className="text-xl font-bold text-yellow-600">{statistics.totalAttempted}</div>
+                  <div className="text-xs text-gray-600">Attempted</div>
                 </div>
-
-                {isEditable && activeTab === 'solve' && (
-                  <div className="mb-4">
-                    <div className="flex justify-between items-center mb-2">
-                      {/* Timer display */}
-                      {startTime && (
-                        <div className="text-sm text-gray-600 flex items-center">
-                          <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-                          </svg>
-                          Time elapsed: {Math.floor(elapsedTime / 60)}:{(elapsedTime % 60).toString().padStart(2, '0')}
-                        </div>
-                      )}
-                      <div className="flex gap-2">
-                        <button
-                          className="bg-yellow-500 hover:bg-yellow-600 text-white font-medium py-2 px-4 rounded-full flex items-center mr-2"
-                          onClick={handleRunCode}
-                          disabled={isRunning || !studentCode.trim()}
-                        >
-                          {isRunning ? (
-                            <>
-                              <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                              </svg>
-                              Running...
-                            </>
-                          ) : 'Run'}
-                        </button>
-                        <button
-                          className="bg-green-500 hover:bg-green-600 text-white font-medium py-2 px-4 rounded-full flex items-center"
-                          onClick={handleSubmit}
-                          disabled={isSubmitting || !studentCode.trim()}
-                        >
-                          {isSubmitting ? (
-                            <>
-                              <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                              </svg>
-                              Submitting...
-                            </>
-                          ) : 'Submit Solution'}
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                )}
-                
-                {isEditable && activeTab === 'broadcast' && (
-                  <div className="mb-4">
-                    <div className="flex justify-center">
-                      <button
-                        className="bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-full"
-                        onClick={() => setActiveTab('solve')}
-                      >
-                        Switch to Solve Mode
-                      </button>
-                    </div>
-                  </div>
-                )}
-
-                <div className="flex flex-wrap -mx-2 mb-4">
-                  <div className="w-full md:w-1/2 px-2">
-                    <div className="border border-gray-200 rounded-lg shadow-sm">
-                      <div className="bg-gray-100 py-2 px-4">Your Input</div>
-                      <div className="p-4">
-                        <textarea
-                          className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                          rows={4}
-                          value={input}
-                          readOnly={!isEditable}
-                          onChange={(e) => {
-                            const newInput = e.target.value;
-                            dispatch(setInput(newInput));
-                            // Only emit input changes when in editable mode
-                            if (isEditable && socket && socket.connected) {
-                              socket.emit('input-change', { roomId, input: newInput });
-                            }
-                          }}
-                          placeholder="Input will appear here..."
-                        />
-                      </div>
-                    </div>
-                  </div>
-                  <div className="w-full md:w-1/2 px-2">
-                    <div className="border border-gray-200 rounded-lg shadow-sm">
-                      <div className="bg-gray-100 py-2 px-4">Your Output</div>
-                      <div className="p-4">
-                        <textarea
-                          className="w-full px-3 py-2 border border-gray-300 rounded-md bg-gray-50"
-                          rows={4}
-                          value={output}
-                          readOnly
-                          placeholder="Output will appear here..."
-                        />
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <div className="w-full lg:w-1/3 px-2">
-              {/* Student Statistics */}
-              <div className="border border-gray-200 rounded-lg shadow-sm mb-4">
-                <div className="bg-gray-100 py-2 px-4">
-                  <span>Your Progress</span>
-                </div>
-                <div className="p-4">
-                  <div className="grid grid-cols-3 gap-2 mb-2">
-                    <div className="bg-blue-50 p-2 rounded text-center">
-                      <div className="text-xl font-semibold text-blue-600">{submissionData?.totalActive || 0}</div>
-                      <div className="text-xs text-gray-600">Active</div>
-                    </div>
-                    <div className="bg-yellow-50 p-2 rounded text-center">
-                      <div className="text-xl font-semibold text-yellow-600">{submissionData?.totalAttempted || 0}</div>
-                      <div className="text-xs text-gray-600">Attempted</div>
-                    </div>
-                    <div className="bg-green-50 p-2 rounded text-center">
-                      <div className="text-xl font-semibold text-green-600">{submissionData?.totalSolved || 0}</div>
-                      <div className="text-xs text-gray-600">Solved</div>
-                    </div>
-                  </div>
-                  <div className="w-full bg-gray-200 rounded-full h-2.5 mb-1">
-                    <div 
-                      className="bg-green-600 h-2.5 rounded-full transition-all duration-500 ease-in-out" 
-                      style={{ width: `${submissionData?.totalActive > 0 ? (submissionData.totalSolved / submissionData.totalActive) * 100 : 0}%` }}
-                    ></div>
-                  </div>
-                  <div className="text-xs text-center text-gray-500">
-                    {submissionData?.totalSolved || 0} of {submissionData?.totalActive || 0} completed
-                  </div>
+                <div className="bg-green-50 p-3 rounded text-center">
+                  <div className="text-xl font-bold text-green-600">{statistics.totalSolved}</div>
+                  <div className="text-xs text-gray-600">Solved</div>
                 </div>
               </div>
               
-              {/* Available Test Cases */}
-              <div className="border border-gray-200 rounded-lg shadow-sm mb-4">
-                <div className="bg-gray-100 py-2 px-4 flex justify-between items-center">
-                  <span>Available Test Cases</span>
-                  {testCases?.length > 0 && (
-                    <span className="bg-blue-500 text-white text-xs px-2 py-1 rounded-full">
-                      {testCases.length}
-                    </span>
-                  )}
-                </div>
-                <div className="p-4">
-                  {isLoadingTestCases ? (
-                    <div className="text-center py-4">
-                      <svg className="animate-spin h-5 w-5 text-blue-500 mx-auto" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                      </svg>
-                      <p className="mt-2">Loading test cases...</p>
-                    </div>
-                  ) : testCases?.length === 0 ? (
-                    <div className="text-center py-4">
-                      <p className="mb-1">No test cases available yet</p>
-                      <p className="text-gray-500 text-sm">Wait for your teacher to publish test cases</p>
-                    </div>
-                  ) : (
-                    <div className="space-y-2">
-                      {testCases?.map((tc) => {
-                         const isNew = newTestCases[tc.id] || false;
-                         const isSolved = submissionData?.solvedTestCases?.some(solved => solved.id === tc.id);
-                         const isSelected = selectedTestCase?.id === tc.id;
-                         
-                         return (
-                           <button
-                             key={tc.id}
-                             className={`w-full text-left px-3 py-2 rounded transition-all ${
-                               isSelected 
-                                 ? 'bg-blue-500 text-white' 
-                                 : isNew 
-                                   ? 'bg-yellow-50 border border-yellow-400 hover:bg-yellow-100' 
-                                   : 'bg-gray-100 text-gray-800 hover:bg-gray-200'
-                             }`}
-                             onClick={() => handleTestCaseSelect(tc)}
-                           >
-                             <div className="flex justify-between items-center">
-                               <div className="flex items-center">
-                                 <span>{tc.title || `Test Case #${tc.id.substring(0, 4)}`}</span>
-                                 {isNew && <span className="ml-2 text-xs bg-yellow-500 text-white px-2 py-0.5 rounded-full animate-pulse">NEW</span>}
-                               </div>
-                               <div className="flex items-center gap-1">
-                                 {isSolved && <span className="bg-green-500 text-white text-xs px-2 py-1 rounded-full">✓</span>}
-                                 {isSelected && <span className="bg-white text-blue-500 text-xs px-2 py-1 rounded-full">Selected</span>}
-                               </div>
-                             </div>
-                           </button>
-                         );
-                       })}
-                    </div>
-                  )}
-                </div>
+              {/* Progress Bar */}
+              <div className="w-full bg-gray-200 rounded-full h-3 mb-2">
+                <div 
+                  className="bg-green-600 h-3 rounded-full transition-all duration-500" 
+                  style={{ 
+                    width: `${statistics.totalActive > 0 ? (statistics.totalSolved / statistics.totalActive) * 100 : 0}%` 
+                  }}
+                />
               </div>
+              <div className="text-xs text-center text-gray-500">
+                {statistics.totalSolved} of {statistics.totalActive} completed
+                {statistics.totalActive > 0 && (
+                  <span className="ml-1">
+                    ({Math.round((statistics.totalSolved / statistics.totalActive) * 100)}%)
+                  </span>
+                )}
+              </div>
+            </div>
+          </div>
+          
+          {/* Available Test Cases */}
+          <div className="border border-gray-200 rounded-lg shadow-sm">
+            <div className="bg-gray-100 py-2 px-4 flex justify-between items-center">
+              <span className="text-gray-600">Test Cases ({testCases?.length || 0})</span>
+              <button
+                onClick={refetchTestCases}
+                className="text-xs bg-blue-500 text-white px-2 py-1 rounded hover:bg-blue-600"
+                title="Refresh test cases"
+              >
+                🔄
+              </button>
+            </div>
+            <div className="p-4">
+              {!testCases || testCases.length === 0 ? (
+                <div className="text-center py-6 text-gray-500">
+                  <div className="text-4xl mb-2">📝</div>
+                  <p className="font-medium">No test cases available</p>
+                  <p className="text-sm mt-1">Wait for your teacher to publish test cases</p>
+                  <button
+                    onClick={refetchTestCases}
+                    className="mt-3 bg-blue-500 text-white px-4 py-2 rounded text-sm hover:bg-blue-600 transition-colors"
+                  >
+                    Check for Updates
+                  </button>
+                </div>
+              ) : (
+                <div className="space-y-3 max-h-80 overflow-y-auto">
+                  {testCases.map((tc, index) => {
+                    const isNew = newTestCases[tc.id];
+                    const isSolved = solvedTestCaseIds.has(tc.id);
+                    const isSelected = selectedTestCase?.id === tc.id;
+                    
+                    return (
+                      <button
+                        key={tc.id}
+                        className={`w-full text-left px-4 py-3 rounded-lg border-2 transition-all duration-200 ${
+                          isSelected 
+                            ? 'bg-blue-500 text-white border-blue-600 shadow-lg transform scale-105' 
+                            : isNew 
+                              ? 'bg-yellow-50 border-yellow-400 hover:bg-yellow-100 animate-pulse' 
+                              : isSolved
+                                ? 'bg-green-50 border-green-300 hover:bg-green-100'
+                                : 'bg-gray-50 border-gray-200 hover:bg-gray-100 hover:border-gray-300'
+                        }`}
+                        onClick={() => handleTestCaseSelect(tc)}
+                      >
+                        <div className="flex justify-between items-center mb-2">
+                          <span className="font-medium text-sm">
+                            {index + 1}. {tc.title}
+                          </span>
+                          <div className="flex gap-1">
+                            {isNew && (
+                              <span className="text-xs bg-yellow-500 text-white px-2 py-1 rounded-full animate-pulse font-bold">
+                                NEW
+                              </span>
+                            )}
+                            {isSolved && (
+                              <span className="text-xs bg-green-500 text-white px-2 py-1 rounded-full font-bold">
+                                ✓ SOLVED
+                              </span>
+                            )}
+                            {isSelected && (
+                              <span className="text-xs bg-blue-700 text-white px-2 py-1 rounded-full font-bold">
+                                ACTIVE
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                        <div className={`text-xs ${isSelected ? 'opacity-90' : 'opacity-75'}`}>
+                          <div className="truncate">
+                            <strong>Expected:</strong> {tc.expectedOutput?.substring(0, 40)}
+                            {tc.expectedOutput?.length > 40 && '...'}
+                          </div>
+                          <div className="mt-1 text-gray-500">
+                            Created: {new Date(tc.createdAt).toLocaleTimeString()}
+                          </div>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           </div>
         </div>
       </div>
-    )
-}
+    </div>
+  );
+};
 
-export default StudentRoom
+export default StudentRoom;

@@ -5,7 +5,12 @@ class SocketManager {
   constructor(server) {
     this.io = new Server(server, {
       cors: {
-        origin: process.env.CLIENT_URL || "http://localhost:5173/",
+        origin: [
+          "http://localhost:5173",  // Vite dev server default port
+          "http://localhost:3000",  // Alternative React dev port
+          "http://127.0.0.1:5173",
+          process.env.CLIENT_URL
+        ].filter(Boolean),
         methods: ["GET", "POST"],
         credentials: true
       },
@@ -21,6 +26,7 @@ class SocketManager {
     this.setupSocketHandlers();
   }
 
+  // ... rest of your code remains the same
   setupSocketHandlers() {
     this.io.on('connection', (socket) => {
       console.log(`Socket connected: ${socket.id}`);
@@ -61,6 +67,10 @@ class SocketManager {
         this.handleHeartbeat(socket, roomId, timestamp);
       });
 
+      socket.on('request-sync', ({ roomId }) => {
+        this.handleSyncRequest(socket, roomId);
+      });
+
       socket.on('disconnect', (reason) => {
         this.handleDisconnect(socket, reason);
       });
@@ -88,7 +98,13 @@ class SocketManager {
         teachers: [],
         testCases: [],
         createdAt: new Date(),
-        lastActivity: new Date()
+        lastActivity: new Date(),
+        currentState: {
+          code: '',
+          input: '',
+          output: '',
+          language: 'javascript'
+        }
       });
     }
 
@@ -126,6 +142,10 @@ class SocketManager {
       }
     });
 
+    if (!isTeacher && roomData.currentState) {
+      socket.emit('sync-state', roomData.currentState);
+    }
+
     this.broadcastStudentUpdate(roomId);
   }
 
@@ -155,19 +175,47 @@ class SocketManager {
   }
 
   handleCodeChange(socket, roomId, code, timestamp, sessionId) {
-    socket.to(roomId).emit('code-update', { code, timestamp, sessionId });
+    if (this.rooms.has(roomId)) {
+      this.rooms.get(roomId).currentState.code = code;
+    }
+    
+    const sessionInfo = this.userSessions.get(socket.id);
+    if (sessionInfo && sessionInfo.isTeacher) {
+      socket.to(roomId).emit('code-update', { code, timestamp, sessionId });
+    }
   }
 
   handleOutputChange(socket, roomId, output, timestamp, sessionId) {
-    socket.to(roomId).emit('output-update', { output, timestamp, sessionId });
+    if (this.rooms.has(roomId)) {
+      this.rooms.get(roomId).currentState.output = output;
+    }
+    
+    const sessionInfo = this.userSessions.get(socket.id);
+    if (sessionInfo && sessionInfo.isTeacher) {
+      socket.to(roomId).emit('output-update', { output, timestamp, sessionId });
+    }
   }
 
   handleLanguageChange(socket, roomId, language, timestamp, sessionId) {
-    socket.to(roomId).emit('language-update', { language, timestamp, sessionId });
+    if (this.rooms.has(roomId)) {
+      this.rooms.get(roomId).currentState.language = language;
+    }
+    
+    const sessionInfo = this.userSessions.get(socket.id);
+    if (sessionInfo && sessionInfo.isTeacher) {
+      socket.to(roomId).emit('language-update', { language, timestamp, sessionId });
+    }
   }
 
   handleInputChange(socket, roomId, input, timestamp, sessionId) {
-    socket.to(roomId).emit('input-update', { input, timestamp, sessionId });
+    if (this.rooms.has(roomId)) {
+      this.rooms.get(roomId).currentState.input = input;
+    }
+    
+    const sessionInfo = this.userSessions.get(socket.id);
+    if (sessionInfo && sessionInfo.isTeacher) {
+      socket.to(roomId).emit('input-update', { input, timestamp, sessionId });
+    }
   }
 
   handleTestCaseCreated(socket, roomId, testCase, timestamp) {
@@ -182,6 +230,13 @@ class SocketManager {
     const sessionInfo = this.userSessions.get(socket.id);
     if (sessionInfo) sessionInfo.lastSeen = new Date();
     socket.emit('heartbeat-ack', { timestamp });
+  }
+
+  handleSyncRequest(socket, roomId) {
+    if (this.rooms.has(roomId)) {
+      const roomData = this.rooms.get(roomId);
+      socket.emit('sync-state', roomData.currentState);
+    }
   }
 
   handleDisconnect(socket, reason) {
@@ -213,7 +268,6 @@ class SocketManager {
   }
 }
 
-// ✅ Export initializeSocket for index.js
 export function initializeSocket(server) {
   return new SocketManager(server);
 }

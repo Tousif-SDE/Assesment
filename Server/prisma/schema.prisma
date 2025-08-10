@@ -26,18 +26,6 @@ model room {
   @@index([teacherId], map: "Room_teacherId_fkey")
 }
 
-model roomparticipant {
-  id        String   @id
-  roomId    String
-  studentId String
-  joinedAt  DateTime @default(now())
-  room      room     @relation(fields: [roomId], references: [id], map: "RoomParticipant_roomId_fkey")
-  user      user     @relation(fields: [studentId], references: [id], map: "RoomParticipant_studentId_fkey")
-
-  @@index([roomId], map: "RoomParticipant_roomId_fkey")
-  @@index([studentId], map: "RoomParticipant_studentId_fkey")
-}
-
 model submission {
   id         String   @id
   testCaseId String
@@ -47,6 +35,7 @@ model submission {
   status     String
   studentId  String
   createdAt  DateTime @default(now())
+  timeTaken  Int?
   testcase   testcase @relation(fields: [testCaseId], references: [id], map: "Submission_testCaseId_fkey")
   user       user?    @relation(fields: [userId], references: [id], map: "Submission_userId_fkey")
 
@@ -79,6 +68,18 @@ model user {
   room            room[]
   roomparticipant roomparticipant[]
   submission      submission[]
+}
+
+model roomparticipant {
+  id        String   @id @default(uuid())
+  roomId    String
+  studentId String
+  joinedAt  DateTime @default(now())
+  room      room     @relation(fields: [roomId], references: [id], map: "RoomParticipant_roomId_fkey")
+  student   user     @relation(fields: [studentId], references: [id], map: "RoomParticipant_studentId_fkey")
+
+  @@index([roomId], map: "RoomParticipant_roomId_fkey")
+  @@index([studentId], map: "RoomParticipant_studentId_fkey")
 }
 
 enum user_role {

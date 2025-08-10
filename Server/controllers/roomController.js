@@ -1,5 +1,6 @@
 import prisma from '../prisma/prismaClient.js';
 import { v4 as uuidv4 } from 'uuid';
+
 // ✅ Teacher creates a room
 export const createRoom = async (req, res) => {
   try {
@@ -15,7 +16,6 @@ export const createRoom = async (req, res) => {
     } = req.body;
 
     // Generate a UUID for the room ID
-    const { v4: uuidv4 } = await import('uuid');
     const roomId = uuidv4();
 
     const newRoom = await prisma.room.create({
@@ -88,7 +88,8 @@ export const joinRoom = async (req, res) => {
     });
 
     if (alreadyJoined) {
-      return res.status(400).json({ message: 'Already joined this room' });
+      // Allow rejoining - return success with room info
+      return res.json({ message: 'Already joined this room', room });
     }
 
     await prisma.roomparticipant.create({
@@ -105,6 +106,33 @@ export const joinRoom = async (req, res) => {
     res.status(500).json({
       message: 'Error joining room',
       error: error.message
+    });
+  }
+};
+
+// ✅ Submission create example with correct relation field name
+export const createSubmission = async (req, res) => {
+  try {
+    const { studentId, code, output, status, timeTaken, testCaseId } = req.body;
+
+    const submission = await prisma.submission.create({
+      data: {
+        id: uuidv4(),
+        studentId,
+        code,
+        output,
+        status,
+        timeTaken, // ✅ this now exists in schema
+        testcase: { connect: { id: testCaseId } } // ✅ matches relation name in schema
+      }
+    });
+
+    res.status(201).json(submission);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({
+      error: 'Failed to submit code',
+      details: error.message
     });
   }
 };
