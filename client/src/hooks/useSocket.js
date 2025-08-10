@@ -189,6 +189,28 @@ const useSocket = (roomId) => {
         setLastActivity(Date.now())
       }
       
+      const onRoomDeleted = ({ roomId, message }) => {
+        if (roomId === roomIdRef.current) {
+          // Notify user that the room has been deleted
+          const event = new CustomEvent('room-deleted', {
+            detail: {
+              roomId,
+              message: message || 'This room has been deleted by the teacher',
+              timestamp: new Date().toISOString()
+            }
+          })
+          window.dispatchEvent(event)
+          
+          // Disconnect from the room
+          if (socket) {
+            socket.emit('leave-room', { roomId })
+            stopHeartbeat()
+          }
+          
+          // Redirect to dashboard (handled by component listening to the event)
+        }
+      }
+      
       const onTestCaseCreated = ({ testCase, timestamp }) => {
         if (testCase) {
           const event = new CustomEvent('test-case-created', { 
@@ -243,6 +265,7 @@ const useSocket = (roomId) => {
       socket.on('test-case-created', onTestCaseCreated)
       socket.on('room-joined', onRoomJoined)
       socket.on('room-error', onRoomError)
+      socket.on('room-deleted', onRoomDeleted)
 
       // Connect the socket
       if (!socket.connected) {
@@ -274,6 +297,7 @@ const useSocket = (roomId) => {
         socket.off('student-update', onStudentUpdate)
         socket.off('test-case-created', onTestCaseCreated)
         socket.off('room-joined', onRoomJoined)
+        socket.off('room-deleted', onRoomDeleted)
         socket.off('room-error', onRoomError)
         
         // Leave room
@@ -288,7 +312,7 @@ const useSocket = (roomId) => {
       console.error('Error setting up socket connection:', error)
       setIsConnected(false)
     }
-  }, [roomId, startHeartbeat, stopHeartbeat, connectionAttempts])
+  }, [roomId, startHeartbeat, stopHeartbeat, connectionAttempts]);
 
   // Initialize socket connection
   useEffect(() => {
@@ -297,7 +321,7 @@ const useSocket = (roomId) => {
     const cleanup = connectSocket()
     
     return cleanup
-  }, [roomId, connectSocket])
+  }, [roomId, connectSocket]);
 
   // Cleanup on unmount
   useEffect(() => {
@@ -317,7 +341,7 @@ const useSocket = (roomId) => {
         socket.disconnect()
       }
     }
-  }, [stopHeartbeat])
+  }, [stopHeartbeat]);
 
   // Enhanced emit functions with error handling and retry logic
   const createEmitFunction = useCallback((eventName) => {
@@ -348,40 +372,40 @@ const useSocket = (roomId) => {
         return false
       }
     }
-  }, [roomId])
+  }, [roomId]);
 
   // Emit functions
   const emitCodeChange = useCallback((code) => {
     return createEmitFunction('code-change')({ code })
-  }, [createEmitFunction])
+  }, [createEmitFunction]);
 
   const emitOutputChange = useCallback((output) => {
     return createEmitFunction('output-change')({ output })
-  }, [createEmitFunction])
+  }, [createEmitFunction]);
 
   const emitLanguageChange = useCallback((language) => {
     return createEmitFunction('language-change')({ language })
-  }, [createEmitFunction])
+  }, [createEmitFunction]);
 
   const emitInputChange = useCallback((input) => {
     return createEmitFunction('input-change')({ input })
-  }, [createEmitFunction])
+  }, [createEmitFunction]);
 
   const emitSubmissionStatus = useCallback((status, studentId) => {
     return createEmitFunction('submission-status')({ status, studentId })
-  }, [createEmitFunction])
+  }, [createEmitFunction]);
 
   const emitHtmlChange = useCallback((code) => {
     return createEmitFunction('html-change')({ code })
-  }, [createEmitFunction])
+  }, [createEmitFunction]);
 
   const emitCssChange = useCallback((code) => {
     return createEmitFunction('css-change')({ code })
-  }, [createEmitFunction])
+  }, [createEmitFunction]);
 
   const emitJsChange = useCallback((code) => {
     return createEmitFunction('js-change')({ code })
-  }, [createEmitFunction])
+  }, [createEmitFunction]);
 
   // Manual reconnection function
   const reconnect = useCallback(() => {
@@ -391,7 +415,7 @@ const useSocket = (roomId) => {
         socket.connect()
       }, 1000)
     }
-  }, [])
+  }, []);
 
   return {
     socket,
@@ -409,6 +433,6 @@ const useSocket = (roomId) => {
     emitCssChange,
     emitJsChange,
   }
-}
+};
 
-export default useSocket
+export default useSocket;

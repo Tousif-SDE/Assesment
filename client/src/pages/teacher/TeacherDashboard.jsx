@@ -1,20 +1,38 @@
 // client/src/pages/teacher/TeacherDashboard.jsx
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { useGetMyRoomsQuery } from '../../redux/api/roomApi';
-import { useGetSubmissionsByStudentQuery, useGetRoomSubmissionsQuery } from '../../redux/api/codeApi';
-import { Spinner } from 'react-bootstrap'; // Import Spinner from react-bootstrap
+import { useGetMyRoomsQuery, useDeleteRoomMutation } from '../../redux/api/roomApi';
+import { 
+  useGetSubmissionsByStudentQuery, 
+  useGetRoomSubmissionsQuery,
+  useGetTeacherDashboardQuery 
+} from '../../redux/api/codeApi';
+import { Spinner, Card, Badge, Table, Alert, Modal, Button } from 'react-bootstrap'; // Import components from react-bootstrap
+import useSocket from '../../hooks/useSocket';
+import { formatDistanceToNow } from 'date-fns';
 
 const TeacherDashboard = () => {
   const { data: rooms, error, isLoading, refetch } = useGetMyRoomsQuery();
   const { data: submissions, error: submissionsError, isLoading: isLoadingSubmissions } = useGetSubmissionsByStudentQuery();
   const [selectedRoomId, setSelectedRoomId] = useState(null);
+  const [deleteRoom, { isLoading: isDeleting }] = useDeleteRoomMutation();
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [roomToDelete, setRoomToDelete] = useState(null);
   
   // Get submissions for selected room
   const { data: roomSubmissions, isLoading: isLoadingRoomSubmissions } = useGetRoomSubmissionsQuery(selectedRoomId, {
     skip: !selectedRoomId,
     pollingInterval: 5000, // Auto-refresh every 5 seconds
   });
+  
+  // Get teacher dashboard data
+  const { data: dashboardData, isLoading: isLoadingDashboard, refetch: refetchDashboard } = useGetTeacherDashboardQuery();
+  
+  // State for real-time dashboard data
+  const [realtimeDashboard, setRealtimeDashboard] = useState(null);
+  
+  // Socket connection for real-time updates
+  const { socket, isConnected } = useSocket(selectedRoomId);
 
   useEffect(() => {
     // Refetch rooms when component mounts
@@ -25,6 +43,25 @@ const TeacherDashboard = () => {
       setSelectedRoomId(rooms[0].id);
     }
   }, [rooms]);
+  
+  // Listen for real-time dashboard updates
+  useEffect(() => {
+    if (socket && isConnected && selectedRoomId) {
+      // Handle real-time dashboard updates
+      const handleDashboardUpdate = (updatedData) => {
+        console.log('Received dashboard update:', updatedData);
+        setRealtimeDashboard(updatedData);
+      };
+
+      // Subscribe to teacherDashboardUpdate events
+      socket.on('teacherDashboardUpdate', handleDashboardUpdate);
+
+      // Cleanup on unmount
+      return () => {
+        socket.off('teacherDashboardUpdate');
+      };
+    }
+  }, [socket, isConnected, selectedRoomId]);
 
   // Process room submissions data to get student statistics
   const getStudentStatistics = (roomSubs) => {
@@ -89,8 +126,182 @@ const TeacherDashboard = () => {
   const selectedRoom = rooms?.find(room => room.id === selectedRoomId);
   const studentStats = getStudentStatistics(roomSubmissions);
 
+  // Format timestamp
+  const formatTime = (timestamp) => {
+    try {
+      return formatDistanceToNow(new Date(timestamp), { addSuffix: true });
+    } catch (err) {
+      return 'Unknown time';
+    }
+  };
+  
+  // Handle room deletion
+  const handleDeleteClick = (room) => {
+    setRoomToDelete(room);
+    setShowDeleteConfirm(true);
+  };
+  
+  const confirmDeleteRoom = async () => {
+    try {
+      await deleteRoom(roomToDelete.id);
+      // If the deleted room was selected, clear the selection
+      if (selectedRoomId === roomToDelete.id) {
+        setSelectedRoomId(null);
+      }
+      setShowDeleteConfirm(false);
+      setRoomToDelete(null);
+    } catch (error) {
+      console.error('Failed to delete room:', error);
+    }
+  };
+  
+  const cancelDelete = () => {
+    setShowDeleteConfirm(false);
+    setRoomToDelete(null);
+  };
+
+  // Get the dashboard data (either real-time or from API)
+  const displayDashboard = realtimeDashboard || dashboardData;
+
   return (
     <div className="container mx-auto px-4 py-4">
+      {/* Delete Confirmation Modal */}
+      <Modal show={showDeleteConfirm} onHide={cancelDelete} centered>
+        <Modal.Header closeButton>
+          <Modal.Title>Confirm Delete</Modal.Title>
+        </Modal.Header>
+        <Modal.Body>
+          {roomToDelete && (
+            <div>
+              <p>Are you sure you want to delete the room <strong>{roomToDelete.college || roomToDelete.roomName}</strong>?</p>
+              <p className="text-danger">This will permanently delete all test cases, submissions, and student data associated with this room.</p>
+            </div>
+          )}
+        </Modal.Body>
+        <Modal.Footer>
+          <Button variant="secondary" onClick={cancelDelete}>
+            Cancel
+          </Button>
+          <Button 
+            variant="danger" 
+            onClick={confirmDeleteRoom} 
+            disabled={isDeleting}
+          >
+            {isDeleting ? 'Deleting...' : 'Delete Room'}
+          </Button>
+        </Modal.Footer>
+      </Modal>
+      {/* Real-time Dashboard Section */}
+      {displayDashboard && (
+        <div className="mb-6">
+          <h4 className="text-gray-600 font-medium mb-4">Real-time Dashboard</h4>
+          
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+            <Card className="shadow-sm border-0">
+              <Card.Body className="text-center">
+                <h3 className="text-primary">{displayDashboard.totalActive}</h3>
+                <p className="text-muted mb-0">Active Students</p>
+                <small className="text-muted">(Last {displayDashboard.activeTimeWindowMinutes || 30} min)</small>
+              </Card.Body>
+            </Card>
+            
+            <Card className="shadow-sm border-0">
+              <Card.Body className="text-center">
+                <h3 className="text-info">{displayDashboard.totalAttempted}</h3>
+                <p className="text-muted mb-0">Test Cases Attempted</p>
+              </Card.Body>
+            </Card>
+            
+            <Card className="shadow-sm border-0">
+              <Card.Body className="text-center">
+                <h3 className="text-success">{displayDashboard.totalSolved}</h3>
+                <p className="text-muted mb-0">Test Cases Solved</p>
+              </Card.Body>
+            </Card>
+          </div>
+          
+          {/* Solved Test Cases */}
+          <Card className="shadow-sm border-0 mb-4">
+            <Card.Header className="bg-white">
+              <h5 className="mb-0">Solved Test Cases</h5>
+            </Card.Header>
+            <Card.Body>
+              {displayDashboard.solvedTestCases && displayDashboard.solvedTestCases.length > 0 ? (
+                <Table responsive hover>
+                  <thead>
+                    <tr>
+                      <th>Test Case</th>
+                      <th>Student</th>
+                      <th>Status</th>
+                      <th>Time Taken</th>
+                      <th>Solved</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {displayDashboard.solvedTestCases.map((testCase, index) => (
+                      <tr key={`${testCase.testCaseId}-${testCase.studentId}-${index}`}>
+                        <td>{testCase.testCaseId.substring(0, 8)}...</td>
+                        <td>{testCase.studentName}</td>
+                        <td>
+                          <Badge bg="success">Solved</Badge>
+                        </td>
+                        <td>{testCase.timeTaken} seconds</td>
+                        <td>{formatTime(testCase.timestamp)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </Table>
+              ) : (
+                <Alert variant="light">No solved test cases yet.</Alert>
+              )}
+            </Card.Body>
+          </Card>
+          
+          {/* Recent Submissions */}
+          <Card className="shadow-sm border-0 mb-4">
+            <Card.Header className="bg-white">
+              <h5 className="mb-0">Recent Submissions</h5>
+            </Card.Header>
+            <Card.Body>
+              {displayDashboard.submissions && displayDashboard.submissions.length > 0 ? (
+                <Table responsive hover>
+                  <thead>
+                    <tr>
+                      <th>ID</th>
+                      <th>Test Case</th>
+                      <th>Student</th>
+                      <th>Status</th>
+                      <th>Time Taken</th>
+                      <th>Submitted</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {displayDashboard.submissions.slice(0, 10).map((submission) => (
+                      <tr key={submission.id}>
+                        <td>{submission.id.substring(0, 8)}...</td>
+                        <td>{submission.testCaseTitle}</td>
+                        <td>{submission.studentName}</td>
+                        <td>
+                          <Badge 
+                            bg={submission.status === 'Solved' ? 'success' : 'danger'}
+                          >
+                            {submission.status}
+                          </Badge>
+                        </td>
+                        <td>{submission.timeTaken} seconds</td>
+                        <td>{formatTime(submission.createdAt)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </Table>
+              ) : (
+                <Alert variant="light">No submissions yet.</Alert>
+              )}
+            </Card.Body>
+          </Card>
+        </div>
+      )}
+      
       <div className="flex items-center justify-between mb-4">
         <div>
           <h4 className="text-gray-600 font-medium">Live Code Rooms</h4>
@@ -156,6 +367,12 @@ const TeacherDashboard = () => {
                       Join
                     </button>
                   </Link>
+                  <button 
+                    onClick={() => handleDeleteClick(room)}
+                    className="bg-red-500 hover:bg-red-600 text-white text-sm font-medium py-1 px-3 rounded-full"
+                  >
+                    Delete
+                  </button>
                 </div>
               </div>
             </div>
@@ -180,6 +397,7 @@ const TeacherDashboard = () => {
             <div className="bg-blue-50 p-4 rounded-lg text-center">
               <div className="text-2xl font-bold text-blue-600">{studentStats.totalStudents}</div>
               <div className="text-sm text-gray-600">Active Students</div>
+              <div className="text-xs text-gray-500">(Last {roomSubmissions?.activeTimeWindowMinutes || 30} min)</div>
             </div>
             <div className="bg-green-50 p-4 rounded-lg text-center">
               <div className="text-2xl font-bold text-green-600">{studentStats.solvedSubmissions}</div>

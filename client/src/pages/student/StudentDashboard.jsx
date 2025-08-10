@@ -85,6 +85,7 @@ const StudentDashboard = () => {
                 <Card.Body>
                   <h3 className="text-primary">{statistics.totalActive}</h3>
                   <p className="text-muted mb-0">Active Test Cases</p>
+                  <small className="text-muted">(Last {submissions?.activeTimeWindowMinutes || 30} min)</small>
                 </Card.Body>
               </Card>
             </Col>

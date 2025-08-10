@@ -136,3 +136,62 @@ export const createSubmission = async (req, res) => {
     });
   }
 };
+
+// Delete a room and all associated data
+export const deleteRoom = async (req, res) => {
+  try {
+    const { roomId } = req.params;
+    const teacherId = req.user.id;
+
+    // Verify that the teacher owns this room
+    const room = await prisma.room.findFirst({
+      where: { 
+        id: roomId,
+        teacherId 
+      },
+    });
+
+    if (!room) {
+      return res.status(403).json({ error: 'Not authorized to delete this room' });
+    }
+
+    // Delete all related data in the correct order to maintain referential integrity
+    // 1. First delete all submissions related to test cases in this room
+    await prisma.submission.deleteMany({
+      where: {
+        testcase: {
+          roomId
+        }
+      }
+    });
+
+    // 2. Delete all test cases in this room
+    await prisma.testcase.deleteMany({
+      where: { roomId }
+    });
+
+    // 3. Delete all room participants
+    await prisma.roomparticipant.deleteMany({
+      where: { roomId }
+    });
+
+    // 4. Finally delete the room itself
+    await prisma.room.delete({
+      where: { id: roomId }
+    });
+
+    // If socket manager is available, notify clients that the room has been deleted
+    if (req.app.get('socketManager')) {
+      const socketManager = req.app.get('socketManager');
+      socketManager.io.to(roomId).emit('room-deleted', { roomId, message: 'This room has been deleted by the teacher' });
+    }
+
+    res.json({ message: 'Room deleted successfully', roomId });
+  } catch (error) {
+    console.error('Delete room error:', error);
+    res.status(500).json({
+      error: 'Failed to delete room',
+      details: error.message
+    });
+  }
+};

@@ -15,6 +15,13 @@ export const roomApi = apiSlice.injectEndpoints({
       query: () => '/room/myrooms',
       providesTags: ['Room'],
     }),
+    deleteRoom: builder.mutation({
+      query: (roomId) => ({
+        url: `/room/${roomId}`,
+        method: 'DELETE',
+      }),
+      invalidatesTags: ['Room'],
+    }),
     
     // Student endpoints
     joinRoom: builder.mutation({
@@ -30,5 +37,6 @@ export const roomApi = apiSlice.injectEndpoints({
 export const {
   useCreateRoomMutation,
   useGetMyRoomsQuery,
+  useDeleteRoomMutation,
   useJoinRoomMutation,
 } = roomApi

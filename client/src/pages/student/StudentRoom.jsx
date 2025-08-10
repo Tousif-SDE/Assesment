@@ -99,6 +99,30 @@ const StudentRoom = () => {
     }
   }, [roomId, dispatch]);
   
+  // Handle room deleted event
+  useEffect(() => {
+    const handleRoomDeleted = (event) => {
+      const { detail } = event;
+      console.log('Room deleted event received:', detail);
+      
+      if (detail.roomId === roomId) {
+        setError(detail.message || 'This room has been deleted by the teacher');
+        
+        // Redirect to dashboard after a short delay
+        setTimeout(() => {
+          navigate('/student/dashboard');
+        }, 3000);
+      }
+    };
+    
+    // Listen for room-deleted event
+    window.addEventListener('room-deleted', handleRoomDeleted);
+    
+    return () => {
+      window.removeEventListener('room-deleted', handleRoomDeleted);
+    };
+  }, [roomId, navigate]);
+  
   // Request sync when connected and initialized
   useEffect(() => {
     if (isConnected && socket && isInitialized && !isEditable) {
@@ -319,7 +343,7 @@ const StudentRoom = () => {
   
   // Run student code
   const handleRunCode = async () => {
-    if (!studentCode.trim()) {
+    if (!((studentCode || '')?.trim() || '')) {
       setError('Please write some code first');
       return;
     }
@@ -346,142 +370,193 @@ const StudentRoom = () => {
         stdin: testInput,
       });
 
-      const result = await runCode({
-        language_id: languageId,
-        source_code: studentCode,
-        stdin: testInput,
-      }).unwrap();
-      
-      console.log('Code execution result:', result);
-      
-      // Handle the response
-      let outputText = '';
-      
-      if (result.stdout) {
-        outputText = result.stdout;
-      } else if (result.stderr) {
-        outputText = `Error: ${result.stderr}`;
-      } else if (result.compile_output) {
-        outputText = `Compilation Error: ${result.compile_output}`;
-      } else if (result.message) {
-        outputText = `System: ${result.message}`;
-      } else {
-        outputText = 'No output';
-      }
-      
-      setStudentOutput(outputText);
-      
-      // Check if matches expected output
-      if (selectedTestCase && selectedTestCase.expectedOutput) {
-        const actualOutput = outputText.trim();
-        const expectedOutput = selectedTestCase.expectedOutput.trim();
+      try {
+        const result = await runCode({
+          language_id: languageId,
+          source_code: studentCode,
+          stdin: testInput,
+        }).unwrap();
         
-        if (actualOutput === expectedOutput) {
-          setSuccess('✅ Output matches! You can submit your solution.');
+        console.log('Code execution result:', result);
+        
+        // Handle the response
+        let outputText = '';
+        
+        if (result.stdout) {
+          outputText = result.stdout;
+        } else if (result.stderr) {
+          outputText = `Error: ${result.stderr}`;
+        } else if (result.compile_output) {
+          outputText = `Compilation Error: ${result.compile_output}`;
+        } else if (result.message) {
+          outputText = `System: ${result.message}`;
         } else {
-          setSuccess('⚠️ Output doesn\'t match expected result. Keep trying!');
-          console.log('Output mismatch:', {
-            expected: expectedOutput,
-            actual: actualOutput
-          });
+          outputText = 'No output';
         }
-      } else {
-        setSuccess('Code executed successfully!');
+        
+        setStudentOutput(outputText);
+        
+        // Check if matches expected output
+        if (selectedTestCase && selectedTestCase.expectedOutput) {
+          const actualOutput = (outputText || '')?.trim() || '';
+          const expectedOutput = (selectedTestCase?.expectedOutput || '')?.trim() || '';
+          
+          if (actualOutput === expectedOutput) {
+            setSuccess('✅ Output matches! You can submit your solution.');
+          } else {
+            setSuccess('⚠️ Output doesn\'t match expected result. Keep trying!');
+            console.log('Output mismatch:', {
+              expected: expectedOutput,
+              actual: actualOutput
+            });
+          }
+        } else {
+          setSuccess('Code executed successfully!');
+        }
+      } catch (apiError) {
+        console.error('API error running code:', apiError);
+        
+        // Extract error details from the response if available
+        let errorMessage = 'Failed to run code';
+        
+        if (apiError?.data?.message) {
+          errorMessage = apiError.data.message;
+        } else if (apiError?.data?.error) {
+          errorMessage = apiError.data.error;
+        } else if (apiError?.message) {
+          errorMessage = apiError.message;
+        } else if (apiError?.status === 500) {
+          errorMessage = 'Server error - please try again';
+        } else if (apiError?.status === 400) {
+          errorMessage = 'Invalid request - check your code and language selection';
+        } else if (apiError?.status) {
+          errorMessage = `Request failed with status ${apiError.status}`;
+        }
+        
+        setStudentOutput(`Error: ${errorMessage}`);
+        setError(`Failed to run code: ${errorMessage}`);
       }
       
     } catch (err) {
-      console.error('Code execution error:', err);
-      
-      let errorMessage = 'Failed to run code';
-      
-      if (err?.data?.message) {
-        errorMessage = err.data.message;
-      } else if (err?.data?.error) {
-        errorMessage = err.data.error;
-      } else if (err?.message) {
-        errorMessage = err.message;
-      } else if (err?.status === 500) {
-        errorMessage = 'Server error - please try again';
-      } else if (err?.status === 400) {
-        errorMessage = 'Invalid request - check your code and language selection';
-      } else if (err?.status) {
-        errorMessage = `Request failed with status ${err.status}`;
-      }
-      
-      setStudentOutput(`Error: ${errorMessage}`);
+      console.error('Unexpected error running code:', err);
+      const errorMessage = err?.message || 'An unexpected error occurred';
+      setStudentOutput(`Fatal Error: ${errorMessage}`);
       setError(`Failed to run code: ${errorMessage}`);
     }
   };
 
   // Submit solution
   const handleSubmit = async () => {
-    if (!studentCode.trim() || !testCase) {
-      setError('Please write code and select a test case');
+    // Validate inputs
+    if (!((studentCode || '')?.trim() || '')) {
+      setError('Please write some code before submitting.');
       return;
     }
     
+    if (!testCase) {
+      setError('Please select a test case before submitting.');
+      return;
+    }
+    
+    // Calculate time taken
     const timeTaken = startTime ? Math.floor((new Date() - startTime) / 1000) : 0;
+    
+    // Clear previous messages
+    setError(null);
+    setSuccess(null);
     
     try {
       // Use the same language validation for submission
       const validLanguageId = getValidLanguageId(language);
       
-      const result = await createSubmission({
-        testCaseId: testCase.id,
-        code: studentCode,
-        language: validLanguageId, // Use validated language ID
-        timeTaken,
-      }).unwrap();
-      
-      const status = result.submission?.status || 'Unknown';
-      
-      if (status === 'Solved') {
-        setSuccess('🎉 Correct solution! Submitted!');
-        // Emit to teacher
-        if (socket && socket.connected) {
-          socket.emit('student-submission-update', { 
-            roomId, 
-            status: 'solved',
-            testCaseId: testCase.id,
-            testCaseTitle: testCase.title,
-            studentName: 'Student', // Add student name if available
-            timeTaken,
-            submissionId: result.submission.id
-          });
-        }
-        // Reset state
-        dispatch(setEditable(false));
-        dispatch(setTestCase(null));
-        setStudentOutput(''); // Clear student output
-        setStartTime(null);
-        setElapsedTime(0);
-        setActiveTab('broadcast');
-        refetchSubmissions();
-        
-        // Request sync after switching back to broadcast
-        if (isConnected && socket) {
-          setTimeout(() => {
-            socket.emit('request-sync', { roomId });
-          }, 500);
-        }
-      } else {
-        setSuccess('❌ Incorrect solution. Submitted! Try again!');
-        // Emit failed attempt
-        if (socket && socket.connected) {
-          socket.emit('student-submission-update', { 
-            roomId, 
-            status: 'failed',
-            testCaseId: testCase.id,
-            testCaseTitle: testCase.title,
-            timeTaken,
-            submissionId: result.submission.id
-          });
-        }
+      if (!validLanguageId) {
+        setError('Invalid programming language selected.');
+        return;
       }
       
+      try {
+        const result = await createSubmission({
+          testCaseId: testCase.id,
+          code: studentCode,
+          language: validLanguageId, // Use validated language ID
+          timeTaken,
+        }).unwrap();
+        
+        console.log('Submission result:', result);
+        
+        // Check submission status
+        const status = result.submission?.status || 'Unknown';
+        
+        if (status === 'Solved') {
+          setSuccess('🎉 Correct solution! Submitted successfully!');
+          // Emit to teacher if socket is connected
+          if (socket && socket.connected) {
+            try {
+              socket.emit('student-submission-update', { 
+                roomId, 
+                status: 'solved',
+                testCaseId: testCase.id,
+                testCaseTitle: testCase.title,
+                studentName: 'Student', // Add student name if available
+                timeTaken,
+                submissionId: result.submission.id
+              });
+            } catch (socketError) {
+              console.error('Socket emission error:', socketError);
+              // Non-critical error, continue with submission process
+            }
+          }
+          // Reset state
+          dispatch(setEditable(false));
+          dispatch(setTestCase(null));
+          setStudentOutput(''); // Clear student output
+          setStartTime(null);
+          setElapsedTime(0);
+          setActiveTab('broadcast');
+          refetchSubmissions();
+          
+          // Request sync after switching back to broadcast
+          if (isConnected && socket) {
+            setTimeout(() => {
+              socket.emit('request-sync', { roomId });
+            }, 500);
+          }
+        } else {
+          setSuccess('❌ Incorrect solution. Submitted! Try again!');
+          // Emit failed attempt
+          if (socket && socket.connected) {
+            socket.emit('student-submission-update', { 
+              roomId, 
+              status: 'failed',
+              testCaseId: testCase.id,
+              testCaseTitle: testCase.title,
+              timeTaken,
+              submissionId: result.submission.id
+            });
+          }
+        }
+      } catch (apiError) {
+        console.error('API error during submission:', apiError);
+        
+        // Extract error details from the response if available
+        let errorMessage = 'Failed to submit solution';
+        
+        if (apiError.data?.error) {
+          errorMessage = apiError.data.error;
+          if (apiError.data.details) {
+            errorMessage += `: ${apiError.data.details}`;
+          }
+        } else if (apiError.error) {
+          errorMessage = apiError.error;
+        } else if (apiError.message) {
+          errorMessage = apiError.message;
+        }
+        
+        setError(errorMessage);
+      }
     } catch (err) {
-      console.error('Submission error:', err);
-      setError(err?.data?.message || 'Failed to submit solution');
+      console.error('Unexpected submission error:', err);
+      setError(err?.data?.message || 'An unexpected error occurred during submission');
     }
   };
 
@@ -693,14 +768,14 @@ const StudentRoom = () => {
                       <div className="flex gap-2">
                         <button
                           onClick={handleRunCode}
-                          disabled={isRunning || !studentCode.trim()}
+                          disabled={isRunning || !((studentCode || '')?.trim() || '')}
                           className="bg-yellow-500 hover:bg-yellow-600 text-white px-4 py-2 rounded disabled:bg-yellow-300 disabled:cursor-not-allowed"
                         >
                           {isRunning ? 'Running...' : 'Test Code'}
                         </button>
                         <button
                           onClick={handleSubmit}
-                          disabled={isSubmitting || !studentCode.trim()}
+                          disabled={isSubmitting || !((studentCode || '')?.trim() || '')}
                           className="bg-green-500 hover:bg-green-600 text-white px-4 py-2 rounded disabled:bg-green-300 disabled:cursor-not-allowed"
                         >
                           {isSubmitting ? 'Submitting...' : 'Submit'}
@@ -742,11 +817,11 @@ const StudentRoom = () => {
                   <div className="flex justify-between items-center">
                     <span className="text-gray-600">Expected vs Actual:</span>
                     <span className={`font-medium ${
-                      studentOutput.trim() === selectedTestCase.expectedOutput.trim() 
+                      ((studentOutput || '')?.trim() || '') === ((selectedTestCase?.expectedOutput || '')?.trim() || '') 
                         ? 'text-green-600' 
                         : 'text-red-600'
                     }`}>
-                      {studentOutput.trim() === selectedTestCase.expectedOutput.trim() ? 'MATCH ✓' : 'NO MATCH ✗'}
+                      {((studentOutput || '')?.trim() || '') === ((selectedTestCase?.expectedOutput || '')?.trim() || '') ? 'MATCH ✓' : 'NO MATCH ✗'}
                     </span>
                   </div>
                 </div>
@@ -767,6 +842,7 @@ const StudentRoom = () => {
                 <div className="bg-blue-50 p-3 rounded text-center">
                   <div className="text-xl font-bold text-blue-600">{statistics.totalActive}</div>
                   <div className="text-xs text-gray-600">Active</div>
+                  <div className="text-xs text-gray-500">(Last {submissions?.activeTimeWindowMinutes || 30} min)</div>
                 </div>
                 <div className="bg-yellow-50 p-3 rounded text-center">
                   <div className="text-xl font-bold text-yellow-600">{statistics.totalAttempted}</div>

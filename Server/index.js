@@ -10,6 +10,7 @@ import codeRoutes from './routes/codeRoutes.js';
 import testCaseRoutes from './routes/testCaseRoutes.js';
 import submissionRoutes from './routes/submissionRoutes.js';
 import roomRoutes from './routes/roomRoutes.js'; // main room routes
+import teacherRoutes from './routes/teacherRoutes.js'; // teacher dashboard routes
 
 dotenv.config();
 
@@ -32,11 +33,25 @@ app.use('/api/room', roomRoutes); // Use singular form to match frontend
 app.use('/api/code', codeRoutes);
 app.use('/api/testcases', testCaseRoutes);
 app.use('/api/submissions', submissionRoutes);
+app.use('/api/teacher', teacherRoutes); // Teacher dashboard routes
 
 app.get('/', (req, res) => res.send('API is running...'));
 
-// Initialize socket.io
-initializeSocket(server);
+// Initialize socket.io and make it available to the Express app
+initializeSocket(server, app);
+
+// Add a fallback route handler for all API routes when server is starting up
+app.use('/api/*', (req, res, next) => {
+  // Check if the route handler exists
+  if (req.route) {
+    return next();
+  }
+  // If we get here, no route was matched
+  res.status(503).json({ 
+    message: 'API is starting up, please try again in a moment',
+    status: 'initializing'
+  });
+});
 
 const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));

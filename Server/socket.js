@@ -1,5 +1,11 @@
 // server/socket.js
 import { Server } from 'socket.io';
+import redis from './redis/redisClient.js';
+
+// Check if Redis is connected
+const isRedisConnected = () => {
+  return redis.isReady && redis.isOpen;
+};
 
 class SocketManager {
   constructor(server) {
@@ -18,6 +24,11 @@ class SocketManager {
       allowEIO3: true,
       pingTimeout: 60000,
       pingInterval: 25000
+    });
+    
+    // Set up error handling for Socket.IO
+    this.io.engine.on('connection_error', (err) => {
+      console.error('Socket.IO connection error:', err);
     });
 
     this.rooms = new Map();
@@ -181,7 +192,8 @@ class SocketManager {
     
     const sessionInfo = this.userSessions.get(socket.id);
     if (sessionInfo && sessionInfo.isTeacher) {
-      socket.to(roomId).emit('code-update', { code, timestamp, sessionId });
+      // Broadcast to all clients in the room including sender for consistent state
+      this.io.to(roomId).emit('code-update', { code, timestamp, sessionId });
     }
   }
 
@@ -192,7 +204,8 @@ class SocketManager {
     
     const sessionInfo = this.userSessions.get(socket.id);
     if (sessionInfo && sessionInfo.isTeacher) {
-      socket.to(roomId).emit('output-update', { output, timestamp, sessionId });
+      // Broadcast to all clients in the room including sender for consistent state
+      this.io.to(roomId).emit('output-update', { output, timestamp, sessionId });
     }
   }
 
@@ -203,7 +216,8 @@ class SocketManager {
     
     const sessionInfo = this.userSessions.get(socket.id);
     if (sessionInfo && sessionInfo.isTeacher) {
-      socket.to(roomId).emit('language-update', { language, timestamp, sessionId });
+      // Broadcast to all clients in the room including sender for consistent state
+      this.io.to(roomId).emit('language-update', { language, timestamp, sessionId });
     }
   }
 
@@ -214,7 +228,8 @@ class SocketManager {
     
     const sessionInfo = this.userSessions.get(socket.id);
     if (sessionInfo && sessionInfo.isTeacher) {
-      socket.to(roomId).emit('input-update', { input, timestamp, sessionId });
+      // Broadcast to all clients in the room including sender for consistent state
+      this.io.to(roomId).emit('input-update', { input, timestamp, sessionId });
     }
   }
 
@@ -224,6 +239,11 @@ class SocketManager {
 
   handleSubmissionStatus(socket, roomId, status, testCaseId, studentId, timeTaken) {
     socket.to(roomId).emit('submission-update', { status, testCaseId, studentId, timeTaken });
+  }
+  
+  // Handle teacher dashboard update
+  emitTeacherDashboardUpdate(roomId, dashboardData) {
+    this.io.to(roomId).emit('teacherDashboardUpdate', dashboardData);
   }
 
   handleHeartbeat(socket, roomId, timestamp) {
@@ -268,6 +288,13 @@ class SocketManager {
   }
 }
 
-export function initializeSocket(server) {
-  return new SocketManager(server);
+export function initializeSocket(server, app) {
+  const socketManager = new SocketManager(server);
+  
+  // Make socket manager available to the Express app
+  if (app) {
+    app.set('socketManager', socketManager);
+  }
+  
+  return socketManager;
 }

@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { useParams } from 'react-router-dom'
+import { useParams, useNavigate } from 'react-router-dom'
 import { useSelector, useDispatch } from 'react-redux'
 import {
   setCode,
@@ -68,6 +68,8 @@ const TeacherRoom = () => {
   }, [roomId, dispatch])
 
   // Socket listeners for real-time updates
+  const navigate = useNavigate()
+  
   useEffect(() => {
     if (socket && isConnected) {
       const handleSubmissionUpdate = (data) => {
@@ -86,13 +88,32 @@ const TeacherRoom = () => {
         refetchSubmissions()
         setLastRefresh(Date.now())
       }
+      
+      // Handle room deleted event
+      const handleRoomDeleted = (event) => {
+        const { detail } = event
+        console.log('Room deleted event received:', detail)
+        
+        if (detail.roomId === roomId) {
+          setError(detail.message || 'This room has been deleted by the teacher')
+          
+          // Redirect to dashboard after a short delay
+          setTimeout(() => {
+            navigate('/teacher/dashboard')
+          }, 3000)
+        }
+      }
 
       socket.on('student-submission-update', handleSubmissionUpdate)
       socket.on('student-joined', handleStudentJoined)
+      
+      // Listen for room-deleted event
+      window.addEventListener('room-deleted', handleRoomDeleted)
 
       return () => {
         socket.off('student-submission-update')
         socket.off('student-joined')
+        window.removeEventListener('room-deleted', handleRoomDeleted)
       }
     }
   }, [socket, isConnected, refetchSubmissions])
@@ -400,9 +421,10 @@ const TeacherRoom = () => {
               {/* Overall Stats */}
               <div className="grid grid-cols-2 gap-3 mb-4">
                 <div className="bg-blue-50 p-3 rounded-lg text-center">
-                  <div className="text-2xl font-bold text-blue-600">{stats.totalStudents}</div>
-                  <div className="text-sm text-gray-600">Students</div>
-                </div>
+                <div className="text-2xl font-bold text-blue-600">{stats.totalStudents}</div>
+                <div className="text-sm text-gray-600">Students</div>
+                <div className="text-xs text-gray-500">(Last {roomSubmissions?.activeTimeWindowMinutes || 30} min)</div>
+              </div>
                 <div className="bg-green-50 p-3 rounded-lg text-center">
                   <div className="text-2xl font-bold text-green-600">{stats.solvedSubmissions}</div>
                   <div className="text-sm text-gray-600">Solved</div>
