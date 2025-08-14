@@ -4,7 +4,7 @@ const initialState = {
   code: '',
   input: '',
   output: '',
-  language: '71', // Default to Python (Judge0 language ID)
+  language: 63, // Default to JavaScript (Judge0 language ID) - NUMERIC not string
   runTriggered: false,
   isEditable: false, // For student view (locked until 'Solve' is clicked)
   testCase: null,
@@ -25,7 +25,8 @@ const editorSlice = createSlice({
       state.output = action.payload
     },
     setLanguage: (state, action) => {
-      state.language = action.payload
+      // Ensure language is always stored as a number
+      state.language = Number(action.payload)
     },
     setRunTriggered: (state, action) => {
       state.runTriggered = action.payload

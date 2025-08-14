@@ -44,7 +44,12 @@ export const runCode = async (req, res) => {
       );
 
       clearTimeout(timeoutId);
-      return res.json(response.data);
+      return res.json({
+        stdout: response.data.stdout,
+        stderr: response.data.stderr,
+        compile_output: response.data.compile_output,
+        status: response.data.status,
+      });
     } catch (axiosError) {
       clearTimeout(timeoutId);
       throw axiosError;

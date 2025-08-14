@@ -1,967 +1,1000 @@
-// client/src/pages/student/StudentRoom.jsx
-import { useState, useEffect, useCallback, useRef } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
-import { useSelector, useDispatch } from 'react-redux';
-import {
-  setCode,
-  setInput,
-  setOutput,
-  setLanguage,
-  setEditable,
-  setRoomId,
-  setTestCase,
-} from '../../redux/slices/editorSlice';
-import {
-  useRunCodeMutation,
-  useCreateSubmissionMutation,
-  useGetTestCasesByRoomQuery,
-  useGetSubmissionsByStudentQuery,
-} from '../../redux/api/codeApi';
-import CodeEditor from '../../components/editor/CodeEditor';
-import LanguageSelector from '../../components/editor/LanguageSelector';
-import useSocket from '../../hooks/useSocket';
+import { useState, useEffect, useCallback } from 'react'
+import { useParams, useNavigate } from 'react-router-dom'
+import { useSelector, useDispatch } from 'react-redux'
+import { setCode, setInput, setOutput, setLanguage, setEditable, setRoomId } from '../../redux/slices/editorSlice'
+import { useRunCodeMutation } from '../../redux/api/codeApi'
+import CodeEditor from '../../components/editor/CodeEditor'
+import LanguageSelector from '../../components/editor/LanguageSelector'
+import useSocket from '../../hooks/useSocket'
+import axios from 'axios'
+import { 
+  Container, Row, Col, Card, Button, Alert, Badge, Form, Spinner
+} from 'react-bootstrap'
+import { Play, CheckCircle, Send, Clock, Terminal, Target, ArrowLeft, Check, X } from 'lucide-react'
+
+// FIXED: Language ID mapping for Judge0 API
+const getLanguageId = (language) => {
+  const languageMap = {
+    'javascript': 63,
+    'python': 71,
+    'java': 62,
+    'cpp': 54,
+    'c': 50,
+    'csharp': 51,
+    'go': 60,
+    'php': 68,
+    'ruby': 72,
+    'rust': 73,
+    'kotlin': 78,
+    'swift': 83,
+    'typescript': 74
+  }
+  
+  console.log('Getting language ID for:', language, 'Result:', languageMap[language])
+  return languageMap[language] || 71 // Default to Python if not found
+}
+
+// FIXED: Language templates with proper syntax
+const getLanguageTemplate = (language) => {
+  const templates = {
+    javascript: `// Write your solution here
+function solve() {
+    // Your code here
+    // Read from input if needed
+    console.log("Your output here");
+}
+
+solve();`,
+    
+    python: `# Write your solution here
+# Read input if needed: input_data = input().strip()
+# Process and print output
+print("Your output here")`,
+    
+    java: `import java.util.Scanner;
+
+public class Main {
+    public static void main(String[] args) {
+        Scanner sc = new Scanner(System.in);
+        // Write your solution here
+        // Read input: String input = sc.nextLine();
+        System.out.println("Your output here");
+        sc.close();
+    }
+}`,
+    
+    cpp: `#include <iostream>
+#include <string>
+using namespace std;
+
+int main() {
+    // Write your solution here
+    // Read input: string input; getline(cin, input);
+    cout << "Your output here" << endl;
+    return 0;
+}`,
+    
+    c: `#include <stdio.h>
+#include <string.h>
+
+int main() {
+    // Write your solution here
+    // Read input: char input[1000]; fgets(input, sizeof(input), stdin);
+    printf("Your output here\\n");
+    return 0;
+}`,
+
+    csharp: `using System;
+
+class Program {
+    static void Main() {
+        // Write your solution here
+        // Read input: string input = Console.ReadLine();
+        Console.WriteLine("Your output here");
+    }
+}`,
+
+    go: `package main
+
+import "fmt"
+
+func main() {
+    // Write your solution here
+    // Read input: var input string; fmt.Scanln(&input)
+    fmt.Println("Your output here")
+}`,
+
+    php: `<?php
+// Write your solution here
+// Read input: $input = trim(fgets(STDIN));
+echo "Your output here\\n";
+?>`,
+
+    ruby: `# Write your solution here
+# Read input: input = gets.chomp
+puts "Your output here"`,
+
+    rust: `use std::io;
+
+fn main() {
+    // Write your solution here
+    // Read input: let mut input = String::new(); io::stdin().read_line(&mut input).unwrap();
+    println!("Your output here");
+}`,
+
+    kotlin: `fun main() {
+    // Write your solution here
+    // Read input: val input = readLine()
+    println("Your output here")
+}`,
+
+    swift: `import Foundation
+
+// Write your solution here
+// Read input: let input = readLine()
+print("Your output here")`,
+
+    typescript: `// Write your solution here
+function solve(): void {
+    // Your code here
+    console.log("Your output here");
+}
+
+solve();`
+  }
+  
+  return templates[language] || templates['javascript']
+}
 
 const StudentRoom = () => {
-  const { roomId } = useParams();
-  const navigate = useNavigate();
-  const dispatch = useDispatch();
-  const { code, input, output, language, isEditable, testCase } = useSelector((state) => state.editor);
+  const { roomId } = useParams()
+  const navigate = useNavigate()
+  const dispatch = useDispatch()
+  const { code, input, output, language, isEditable } = useSelector((state) => state.editor)
+
+  // State management
+  const [testCases, setTestCases] = useState([])
+  const [selectedTestCase, setSelectedTestCase] = useState(null)
+  const [studentCode, setStudentCode] = useState('')
+  const [studentOutput, setStudentOutput] = useState('')
+  const [studentInput, setStudentInput] = useState('')
+  const [activeTab, setActiveTab] = useState('broadcast')
+  const [error, setError] = useState(null)
+  const [success, setSuccess] = useState(null)
+  const [startTime, setStartTime] = useState(null)
+  const [elapsedTime, setElapsedTime] = useState(0)
+  const [testResults, setTestResults] = useState([])
+  const [isRunningTests, setIsRunningTests] = useState(false)
+  const [isSubmitting, setIsSubmitting] = useState(false)
+  const [solvedTestCases, setSolvedTestCases] = useState(new Set())
+  const [currentStudentLanguage, setCurrentStudentLanguage] = useState('javascript')
   
-  const [error, setError] = useState(null);
-  const [success, setSuccess] = useState(null);
-  const [selectedTestCase, setSelectedTestCase] = useState(null);
-  const [activeTab, setActiveTab] = useState('broadcast');
-  const [studentCode, setStudentCode] = useState('');
-  const [studentOutput, setStudentOutput] = useState(''); // Separate output for student's code
-  const [newTestCases, setNewTestCases] = useState({});
-  const [startTime, setStartTime] = useState(null);
-  const [elapsedTime, setElapsedTime] = useState(0);
-  const [isInitialized, setIsInitialized] = useState(false);
-  
-  // Use refs to track the latest values
-  const latestCodeRef = useRef(code);
-  const latestInputRef = useRef(input);
-  const latestOutputRef = useRef(output);
-  const latestLanguageRef = useRef(language);
-  const isEditableRef = useRef(isEditable);
-  
-  const [runCode, { isLoading: isRunning }] = useRunCodeMutation();
-  const [createSubmission, { isLoading: isSubmitting }] = useCreateSubmissionMutation();
-  
-  // Get test cases and submissions
-  const { data: testCases, refetch: refetchTestCases } = useGetTestCasesByRoomQuery(roomId, {
-    pollingInterval: 5000,
-  });
-  
-  const { data: submissions, refetch: refetchSubmissions } = useGetSubmissionsByStudentQuery(roomId, {
-    pollingInterval: 3000,
-  });
-  
-  // Socket connection
-  const { 
-    isConnected, 
-    socket, 
-    reconnect,
-    emitCodeChange 
-  } = useSocket(roomId);
-  
-  // Update refs when state changes
-  useEffect(() => {
-    latestCodeRef.current = code;
-  }, [code]);
-  
-  useEffect(() => {
-    latestInputRef.current = input;
-  }, [input]);
-  
-  useEffect(() => {
-    latestOutputRef.current = output;
-  }, [output]);
-  
-  useEffect(() => {
-    latestLanguageRef.current = language;
-  }, [language]);
-  
-  useEffect(() => {
-    isEditableRef.current = isEditable;
-  }, [isEditable]);
-  
-  // Initialize student session
+  const token = localStorage.getItem('token')
+  const [runCode] = useRunCodeMutation()
+  const { isConnected, socket } = useSocket(roomId)
+
+  // Initialize session
   useEffect(() => {
     if (roomId) {
-      dispatch(setRoomId(roomId));
-      
+      dispatch(setRoomId(roomId))
       if (!sessionStorage.getItem('sessionId')) {
-        sessionStorage.setItem('sessionId', `student-${roomId}-${Date.now()}`);
+        sessionStorage.setItem('sessionId', `student-${roomId}-${Date.now()}`)
       }
-      
-      setIsInitialized(true);
     }
-  }, [roomId, dispatch]);
-  
-  // Handle room deleted event
+  }, [roomId, dispatch])
+
+  // Socket event handlers
   useEffect(() => {
-    const handleRoomDeleted = (event) => {
-      const { detail } = event;
-      console.log('Room deleted event received:', detail);
-      
-      if (detail.roomId === roomId) {
-        setError(detail.message || 'This room has been deleted by the teacher');
-        
-        // Redirect to dashboard after a short delay
-        setTimeout(() => {
-          navigate('/student/dashboard');
-        }, 3000);
-      }
-    };
-    
-    // Listen for room-deleted event
-    window.addEventListener('room-deleted', handleRoomDeleted);
-    
-    return () => {
-      window.removeEventListener('room-deleted', handleRoomDeleted);
-    };
-  }, [roomId, navigate]);
-  
-  // Request sync when connected and initialized
-  useEffect(() => {
-    if (isConnected && socket && isInitialized && !isEditable) {
-      console.log('Requesting sync for room:', roomId);
-      socket.emit('request-sync', { roomId });
-    }
-  }, [isConnected, socket, roomId, isInitialized, isEditable]);
-  
-  // Socket event listeners
-  useEffect(() => {
-    if (!isConnected || !socket) return;
+    if (!isConnected || !socket) return
 
     const handleCodeUpdate = ({ code: newCode }) => {
-      console.log('Received code update:', newCode);
-      if (!isEditableRef.current && newCode !== undefined) {
-        dispatch(setCode(newCode));
+      console.log('📥 Received code update:', newCode?.substring(0, 50) + '...')
+      if (newCode !== undefined) {
+        dispatch(setCode(newCode))
       }
-    };
+    }
 
     const handleOutputUpdate = ({ output: newOutput }) => {
-      console.log('Received output update:', newOutput);
+      console.log('📥 Received output update:', newOutput)
       if (newOutput !== undefined) {
-        dispatch(setOutput(newOutput));
+        dispatch(setOutput(newOutput))
       }
-    };
+    }
     
     const handleLanguageUpdate = ({ language: newLanguage }) => {
-      console.log('Received language update:', newLanguage);
+      console.log('📥 Received language update:', newLanguage)
       if (newLanguage !== undefined) {
-        dispatch(setLanguage(newLanguage));
+        dispatch(setLanguage(newLanguage))
+        if (!isEditable) {
+          setCurrentStudentLanguage(newLanguage)
+        }
       }
-    };
+    }
 
+    // FIXED: Handle input updates properly
     const handleInputUpdate = ({ input: newInput }) => {
-      console.log('Received input update:', newInput);
+      console.log('📥 Received input update:', newInput)
       if (newInput !== undefined) {
-        dispatch(setInput(newInput));
+        dispatch(setInput(newInput))
+        setStudentInput(newInput) // Always update student input
       }
-    };
+    }
 
     const handleTestCaseCreated = ({ testCase }) => {
-      if (testCase && testCase.id) {
-        refetchTestCases();
-        setSuccess(`New test case: ${testCase.title}`);
-        setNewTestCases(prev => ({ ...prev, [testCase.id]: true }));
-        
-        // Auto-select if no test case selected
-        if (!selectedTestCase) {
-          handleTestCaseSelect(testCase);
-        }
-        
-        setTimeout(() => setSuccess(null), 3000);
-        setTimeout(() => {
-          setNewTestCases(prev => {
-            const updated = { ...prev };
-            delete updated[testCase.id];
-            return updated;
-          });
-        }, 10000);
+      console.log('📥 Received new test case:', testCase)
+      if (!testCase || !testCase.id) return
+      setTestCases(prev => [...prev, testCase])
+      if (!selectedTestCase) {
+        setSelectedTestCase(testCase)
+        dispatch(setInput(testCase.input || ''))
+        setStudentInput(testCase.input || '')
       }
-    };
+    }
 
     const handleSyncState = ({ code: syncCode, input: syncInput, output: syncOutput, language: syncLanguage }) => {
-      console.log('Received sync state:', { syncCode, syncInput, syncOutput, syncLanguage });
-      
-      // Only update if not in editable mode
-      if (!isEditableRef.current) {
-        if (syncCode !== undefined) dispatch(setCode(syncCode));
-        if (syncInput !== undefined) dispatch(setInput(syncInput));
-        if (syncOutput !== undefined) dispatch(setOutput(syncOutput));
-        if (syncLanguage !== undefined) dispatch(setLanguage(syncLanguage));
+      console.log('📥 Received sync state:', { syncCode: syncCode?.substring(0, 50) + '...', syncInput, syncOutput, syncLanguage })
+      if (syncCode !== undefined) dispatch(setCode(syncCode))
+      if (syncInput !== undefined) {
+        dispatch(setInput(syncInput))
+        if (!isEditable) setStudentInput(syncInput)
       }
-    };
+      if (syncOutput !== undefined) dispatch(setOutput(syncOutput))
+      if (syncLanguage !== undefined) {
+        dispatch(setLanguage(syncLanguage))
+        if (!isEditable) setCurrentStudentLanguage(syncLanguage)
+      }
+    }
 
-    // Register all event listeners
-    socket.on('code-update', handleCodeUpdate);
-    socket.on('output-update', handleOutputUpdate);
-    socket.on('language-update', handleLanguageUpdate);
-    socket.on('input-update', handleInputUpdate);
-    socket.on('test-case-created', handleTestCaseCreated);
-    socket.on('sync-state', handleSyncState);
-
-    console.log('Socket event listeners registered');
+    socket.on('code-update', handleCodeUpdate)
+    socket.on('output-update', handleOutputUpdate)
+    socket.on('language-update', handleLanguageUpdate)
+    socket.on('input-update', handleInputUpdate)
+    socket.on('test-case-created', handleTestCaseCreated)
+    socket.on('sync-state', handleSyncState)
 
     return () => {
-      socket.off('code-update', handleCodeUpdate);
-      socket.off('output-update', handleOutputUpdate);
-      socket.off('language-update', handleLanguageUpdate);
-      socket.off('input-update', handleInputUpdate);
-      socket.off('test-case-created', handleTestCaseCreated);
-      socket.off('sync-state', handleSyncState);
-      console.log('Socket event listeners cleaned up');
-    };
-  }, [isConnected, socket, dispatch, selectedTestCase, refetchTestCases]);
-  
-  // Timer
+      socket.off('code-update', handleCodeUpdate)
+      socket.off('output-update', handleOutputUpdate)
+      socket.off('language-update', handleLanguageUpdate)
+      socket.off('input-update', handleInputUpdate)
+      socket.off('test-case-created', handleTestCaseCreated)
+      socket.off('sync-state', handleSyncState)
+    }
+  }, [isConnected, socket, dispatch, isEditable, selectedTestCase])
+
+  // Load test cases
   useEffect(() => {
-    let timer;
-    if (startTime && isEditable) {
-      timer = setInterval(() => {
-        setElapsedTime(Math.floor((new Date() - startTime) / 1000));
-      }, 1000);
-    }
-    return () => timer && clearInterval(timer);
-  }, [startTime, isEditable]);
-  
-  // Handle test case selection
-  const handleTestCaseSelect = useCallback((testCase) => {
-    setSelectedTestCase(testCase);
-    dispatch(setInput(testCase.input || ''));
-    setActiveTab('broadcast');
-    
-    // Remove new status
-    setNewTestCases(prev => {
-      const updated = { ...prev };
-      delete updated[testCase.id];
-      return updated;
-    });
-  }, [dispatch]);
-  
-  // Start solving
-  const handleSolve = useCallback(() => {
-    if (!selectedTestCase) {
-      setError('Please select a test case first');
-      return;
-    }
-    
-    dispatch(setEditable(true));
-    dispatch(setTestCase(selectedTestCase));
-    setStudentCode(code || `// Solve: ${selectedTestCase.title}\n// Your code here\n`);
-    setStudentOutput(''); // Clear previous student output
-    setStartTime(new Date());
-    setElapsedTime(0);
-    setActiveTab('solve');
-    setSuccess('You can now edit and submit your solution');
-  }, [selectedTestCase, dispatch, code]);
-  
-  // Handle tab change with sync request
-  const handleTabChange = useCallback((tab) => {
-    setActiveTab(tab);
-    
-    // If switching to broadcast tab and not editable, request sync
-    if (tab === 'broadcast' && !isEditable && isConnected && socket) {
-      console.log('Tab changed to broadcast, requesting sync');
-      socket.emit('request-sync', { roomId });
-    }
-  }, [isEditable, isConnected, socket, roomId]);
-  
-  // Handle student code change
-  const handleStudentCodeChange = useCallback((value) => {
-    setStudentCode(value);
-  }, []);
-  
-  // Helper function to get valid language ID
-  const getValidLanguageId = (languageValue) => {
-    // Handle different language value formats
-    let languageId;
-    
-    if (typeof languageValue === 'number') {
-      languageId = languageValue;
-    } else if (typeof languageValue === 'string') {
-      // Try to parse as number
-      const parsed = parseInt(languageValue, 10);
-      if (!isNaN(parsed)) {
-        languageId = parsed;
-      } else {
-        // Handle string language names - map to common language IDs
-        const languageMap = {
-          'javascript': 63,
-          'python': 71,
-          'java': 62,
-          'cpp': 54,
-          'c': 50,
-          'csharp': 51,
-          'php': 68,
-          'ruby': 72,
-          'go': 60,
-          'rust': 73,
-          'kotlin': 78,
-          'swift': 83,
-          'typescript': 74,
-          'scala': 81,
-          'perl': 85,
-          'r': 80,
-          'dart': 90,
-          'elixir': 57,
-          'haskell': 61,
-          'lua': 64,
-          'objectivec': 79,
-          'sql': 82,
-          'bash': 46,
-          'clojure': 86,
-          'cobol': 77,
-          'erlang': 58,
-          'fortran': 59,
-          'groovy': 88,
-          'julia': 79,
-          'lisp': 55,
-          'matlab': 70,
-          'ocaml': 65,
-          'pascal': 67,
-          'prolog': 69,
-          'vb': 84
-        };
+    const loadTestCases = async () => {
+      if (!roomId || !token) return
+      
+      try {
+        const response = await axios.get(`http://localhost:5000/api/testcases/room/${roomId}`, {
+          headers: { Authorization: `Bearer ${token}` }
+        })
         
-        languageId = languageMap[languageValue.toLowerCase()];
+        if (response.data && response.data.length > 0) {
+          setTestCases(response.data)
+          const firstTestCase = response.data[0]
+          setSelectedTestCase(firstTestCase)
+          dispatch(setInput(firstTestCase.input || ''))
+          setStudentInput(firstTestCase.input || '')
+        }
+      } catch (error) {
+        console.error('Failed to load test cases:', error)
+        setError('Failed to load test cases.')
+        setTimeout(() => setError(null), 3000)
       }
     }
     
-    // Default to JavaScript if no valid language found
-    if (!languageId || isNaN(languageId) || languageId <= 0) {
-      console.warn('Invalid language, defaulting to JavaScript (63):', languageValue);
-      languageId = 63; // JavaScript
+    loadTestCases()
+  }, [roomId, dispatch, token])
+
+  // Timer for solving mode
+  useEffect(() => {
+    let interval = null
+    if (startTime && isEditable) {
+      interval = setInterval(() => {
+        setElapsedTime(Math.floor((Date.now() - startTime) / 1000))
+      }, 1000)
+    }
+    return () => {
+      if (interval) clearInterval(interval)
+    }
+  }, [startTime, isEditable])
+
+  // Auto-clear alerts
+  useEffect(() => {
+    if (error) {
+      const timer = setTimeout(() => setError(null), 5000)
+      return () => clearTimeout(timer)
+    }
+  }, [error])
+
+  useEffect(() => {
+    if (success) {
+      const timer = setTimeout(() => setSuccess(null), 5000)
+      return () => clearTimeout(timer)
+    }
+  }, [success])
+
+  // FIXED: Handle language changes for both modes
+  const handleLanguageChange = (newLanguage) => {
+    console.log('Language change requested:', newLanguage)
+    
+    // Validate the language
+    const validLanguages = ['javascript', 'python', 'java', 'cpp', 'c', 'csharp', 'go', 'php', 'ruby', 'rust', 'kotlin', 'swift', 'typescript']
+    
+    if (!validLanguages.includes(newLanguage)) {
+      console.error('Invalid language:', newLanguage)
+      return
+    }
+
+    if (isEditable) {
+      // In solving mode, update student's language
+      setCurrentStudentLanguage(newLanguage)
+    } else {
+      // In broadcast mode, update Redux language and student language
+      dispatch(setLanguage(newLanguage))
+      setCurrentStudentLanguage(newLanguage)
     }
     
-    return languageId;
-  };
-  
-  // Run student code
+    // Broadcast language change via socket
+    if (socket && isConnected) {
+      socket.emit('language-update', { 
+        language: newLanguage, 
+        timestamp: Date.now(),
+        sessionId: sessionStorage.getItem('sessionId')
+      })
+    }
+  }
+
+  // FIXED: Handle input changes properly
+  const handleInputChange = (e) => {
+    const value = e.target.value
+    console.log('Input change:', value)
+    
+    // Always update both Redux state and local state
+    dispatch(setInput(value))
+    setStudentInput(value)
+    
+    // Broadcast input changes to all clients (including teacher)
+    if (socket && isConnected) {
+      socket.emit('input-update', { 
+        input: value, 
+        timestamp: Date.now(),
+        sessionId: sessionStorage.getItem('sessionId')
+      })
+    }
+  }
+
+  // Handle test case selection
+  const handleTestCaseSelect = (testCase) => {
+    console.log('Test case selected:', testCase)
+    setSelectedTestCase(testCase)
+    const testInput = testCase.input || ''
+    dispatch(setInput(testInput))
+    setStudentInput(testInput)
+    setTestResults([])
+    setStudentOutput('')
+  }
+
+  // FIXED: Start solving mode with proper template
+  const handleSolve = () => {
+    if (!selectedTestCase) return
+    
+    setActiveTab('solve')
+    dispatch(setEditable(true))
+    setStartTime(Date.now())
+    setElapsedTime(0)
+    setError(null)
+    setSuccess(null)
+    
+    // Initialize student code with proper template
+    if (!studentCode.trim()) {
+      const template = getLanguageTemplate(currentStudentLanguage)
+      setStudentCode(template)
+    }
+
+    // Set input from selected test case
+    setStudentInput(selectedTestCase.input || '')
+    
+    console.log('Started solving mode:', {
+      language: currentStudentLanguage,
+      testCase: selectedTestCase.title,
+      input: selectedTestCase.input
+    })
+  }
+
+  // FIXED: Compare outputs with proper normalization
+  const compareOutputs = (actual, expected) => {
+    if (!actual && !expected) return true
+    if (!actual || !expected) return false
+    
+    const normalizeOutput = (str) => {
+      return str.toString().trim().replace(/\s+/g, ' ')
+    }
+    
+    return normalizeOutput(actual) === normalizeOutput(expected)
+  }
+
+  // FIXED: Run code function with better error handling
   const handleRunCode = async () => {
-    if (!((studentCode || '')?.trim() || '')) {
-      setError('Please write some code first');
-      return;
+    if (!studentCode?.trim()) {
+      setError('Please write some code first')
+      return
     }
-    
-    setError(null);
-    setStudentOutput('Running code...');
-    
+    if (!selectedTestCase) {
+      setError('Please select a test case first')
+      return
+    }
+
+    const languageId = getLanguageId(currentStudentLanguage)
+    if (!languageId) {
+      setError(`Unsupported language: ${currentStudentLanguage}`)
+      return
+    }
+
+    setIsRunningTests(true)
+    setStudentOutput('Running against test cases...')
+    setError(null)
+    setSuccess(null)
+
+    console.log('Executing code with:', {
+      language: currentStudentLanguage,
+      languageId: languageId,
+      code: studentCode.substring(0, 100) + '...',
+      input: studentInput
+    })
+
     try {
-      // Get valid language ID with fallback
-      const languageId = getValidLanguageId(language);
-      
-      console.log('Language validation:', {
-        original: language,
-        type: typeof language,
-        converted: languageId
-      });
-
-      // Get the test case input
-      const testInput = selectedTestCase?.input || '';
-      
-      console.log('Running code with:', {
-        language_id: languageId,
-        source_code: studentCode,
-        stdin: testInput,
-      });
-
-      try {
-        const result = await runCode({
+      const response = await axios.post(
+        'http://localhost:5000/api/code/run',
+        {
           language_id: languageId,
           source_code: studentCode,
-          stdin: testInput,
-        }).unwrap();
-        
-        console.log('Code execution result:', result);
-        
-        // Handle the response
-        let outputText = '';
-        
-        if (result.stdout) {
-          outputText = result.stdout;
-        } else if (result.stderr) {
-          outputText = `Error: ${result.stderr}`;
-        } else if (result.compile_output) {
-          outputText = `Compilation Error: ${result.compile_output}`;
-        } else if (result.message) {
-          outputText = `System: ${result.message}`;
-        } else {
-          outputText = 'No output';
-        }
-        
-        setStudentOutput(outputText);
-        
-        // Check if matches expected output
-        if (selectedTestCase && selectedTestCase.expectedOutput) {
-          const actualOutput = (outputText || '')?.trim() || '';
-          const expectedOutput = (selectedTestCase?.expectedOutput || '')?.trim() || '';
-          
-          if (actualOutput === expectedOutput) {
-            setSuccess('✅ Output matches! You can submit your solution.');
-          } else {
-            setSuccess('⚠️ Output doesn\'t match expected result. Keep trying!');
-            console.log('Output mismatch:', {
-              expected: expectedOutput,
-              actual: actualOutput
-            });
+          stdin: studentInput || ''
+        },
+        {
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json'
           }
-        } else {
-          setSuccess('Code executed successfully!');
         }
-      } catch (apiError) {
-        console.error('API error running code:', apiError);
-        
-        // Extract error details from the response if available
-        let errorMessage = 'Failed to run code';
-        
-        if (apiError?.data?.message) {
-          errorMessage = apiError.data.message;
-        } else if (apiError?.data?.error) {
-          errorMessage = apiError.data.error;
-        } else if (apiError?.message) {
-          errorMessage = apiError.message;
-        } else if (apiError?.status === 500) {
-          errorMessage = 'Server error - please try again';
-        } else if (apiError?.status === 400) {
-          errorMessage = 'Invalid request - check your code and language selection';
-        } else if (apiError?.status) {
-          errorMessage = `Request failed with status ${apiError.status}`;
-        }
-        
-        setStudentOutput(`Error: ${errorMessage}`);
-        setError(`Failed to run code: ${errorMessage}`);
+      )
+
+      console.log('Code execution response:', response.data)
+
+      const result = response.data
+      
+      // Handle different response formats
+      let actualOutput = ''
+      if (result.stdout) {
+        actualOutput = result.stdout.trim()
+      } else if (result.output) {
+        actualOutput = result.output.trim()
       }
       
-    } catch (err) {
-      console.error('Unexpected error running code:', err);
-      const errorMessage = err?.message || 'An unexpected error occurred';
-      setStudentOutput(`Fatal Error: ${errorMessage}`);
-      setError(`Failed to run code: ${errorMessage}`);
-    }
-  };
+      const expectedOutput = selectedTestCase.expectedOutput ? selectedTestCase.expectedOutput.trim() : ''
+      const passed = compareOutputs(actualOutput, expectedOutput)
 
-  // Submit solution
+      const testResult = {
+        input: studentInput,
+        expectedOutput,
+        actualOutput,
+        passed,
+        error: result.stderr || result.compile_output || null,
+        status: result.status?.description || 'Unknown'
+      }
+
+      setTestResults([testResult])
+      
+      if (result.stderr || result.compile_output) {
+        setStudentOutput(`Error: ${result.stderr || result.compile_output}`)
+        setError(`Execution error: ${result.stderr || result.compile_output}`)
+      } else {
+        setStudentOutput(actualOutput || 'No output')
+        
+        if (passed) {
+          setSuccess('✅ Test case passed! You can now submit your solution.')
+        } else {
+          setError(`❌ Test failed. Expected: "${expectedOutput}", Got: "${actualOutput}"`)
+        }
+      }
+
+    } catch (err) {
+      console.error('Code execution error:', err)
+      const errorMessage = err.response?.data?.error || err.message || 'Failed to execute code'
+      setError(`Execution failed: ${errorMessage}`)
+      setStudentOutput('Execution failed')
+    } finally {
+      setIsRunningTests(false)
+    }
+  }
+
+  // FIXED: Submit solution only if tests pass
   const handleSubmit = async () => {
-    // Validate inputs
-    if (!((studentCode || '')?.trim() || '')) {
-      setError('Please write some code before submitting.');
-      return;
+    if (!studentCode?.trim() || !selectedTestCase) {
+      setError('Please write code and select a test case before submitting')
+      return
     }
-    
-    if (!testCase) {
-      setError('Please select a test case before submitting.');
-      return;
+
+    if (testResults.length === 0 || !testResults.every(r => r.passed)) {
+      setError('All test cases must pass before you can submit. Please fix your code.')
+      return
     }
-    
-    // Calculate time taken
-    const timeTaken = startTime ? Math.floor((new Date() - startTime) / 1000) : 0;
-    
-    // Clear previous messages
-    setError(null);
-    setSuccess(null);
+
+    setIsSubmitting(true)
+    setError(null)
+    setSuccess(null)
     
     try {
-      // Use the same language validation for submission
-      const validLanguageId = getValidLanguageId(language);
-      
-      if (!validLanguageId) {
-        setError('Invalid programming language selected.');
-        return;
-      }
-      
-      try {
-        const result = await createSubmission({
-          testCaseId: testCase.id,
+      const response = await axios.post(
+        'http://localhost:5000/api/submissions',
+        {
+          testCaseId: selectedTestCase.id,
           code: studentCode,
-          language: validLanguageId, // Use validated language ID
-          timeTaken,
-        }).unwrap();
-        
-        console.log('Submission result:', result);
-        
-        // Check submission status
-        const status = result.submission?.status || 'Unknown';
-        
-        if (status === 'Solved') {
-          setSuccess('🎉 Correct solution! Submitted successfully!');
-          // Emit to teacher if socket is connected
-          if (socket && socket.connected) {
-            try {
-              socket.emit('student-submission-update', { 
-                roomId, 
-                status: 'solved',
-                testCaseId: testCase.id,
-                testCaseTitle: testCase.title,
-                studentName: 'Student', // Add student name if available
-                timeTaken,
-                submissionId: result.submission.id
-              });
-            } catch (socketError) {
-              console.error('Socket emission error:', socketError);
-              // Non-critical error, continue with submission process
-            }
-          }
-          // Reset state
-          dispatch(setEditable(false));
-          dispatch(setTestCase(null));
-          setStudentOutput(''); // Clear student output
-          setStartTime(null);
-          setElapsedTime(0);
-          setActiveTab('broadcast');
-          refetchSubmissions();
-          
-          // Request sync after switching back to broadcast
-          if (isConnected && socket) {
-            setTimeout(() => {
-              socket.emit('request-sync', { roomId });
-            }, 500);
-          }
-        } else {
-          setSuccess('❌ Incorrect solution. Submitted! Try again!');
-          // Emit failed attempt
-          if (socket && socket.connected) {
-            socket.emit('student-submission-update', { 
-              roomId, 
-              status: 'failed',
-              testCaseId: testCase.id,
-              testCaseTitle: testCase.title,
-              timeTaken,
-              submissionId: result.submission.id
-            });
+          language: getLanguageId(currentStudentLanguage)
+        },
+        {
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json'
           }
         }
-      } catch (apiError) {
-        console.error('API error during submission:', apiError);
+      )
+
+      if (response.status === 201) {
+        setSolvedTestCases(prev => new Set([...prev, selectedTestCase.id]))
+        setSuccess('🎉 Solution submitted successfully!')
         
-        // Extract error details from the response if available
-        let errorMessage = 'Failed to submit solution';
-        
-        if (apiError.data?.error) {
-          errorMessage = apiError.data.error;
-          if (apiError.data.details) {
-            errorMessage += `: ${apiError.data.details}`;
-          }
-        } else if (apiError.error) {
-          errorMessage = apiError.error;
-        } else if (apiError.message) {
-          errorMessage = apiError.message;
-        }
-        
-        setError(errorMessage);
+        setStartTime(null)
+        dispatch(setEditable(false))
+        setActiveTab('broadcast')
       }
     } catch (err) {
-      console.error('Unexpected submission error:', err);
-      setError(err?.data?.message || 'An unexpected error occurred during submission');
+      console.error('Submission error:', err)
+      setError('Failed to submit solution. Please try again.')
+    } finally {
+      setIsSubmitting(false)
     }
-  };
-
-  // Get solved test case IDs from submissions
-  const getSolvedTestCaseIds = () => {
-    if (!submissions || !Array.isArray(submissions)) return new Set();
-    return new Set(
-      submissions
-        .filter(submission => submission.status === 'Solved')
-        .map(submission => submission.testCaseId)
-    );
-  };
-
-  const solvedTestCaseIds = getSolvedTestCaseIds();
-
-  // Calculate statistics
-  const getStatistics = () => {
-    if (!submissions || !Array.isArray(submissions)) {
-      return { totalActive: testCases?.length || 0, totalAttempted: 0, totalSolved: 0 };
-    }
-
-    const uniqueTestCases = new Set(submissions.map(s => s.testCaseId));
-    const solvedTestCases = new Set(
-      submissions.filter(s => s.status === 'Solved').map(s => s.testCaseId)
-    );
-
-    return {
-      totalActive: testCases?.length || 0,
-      totalAttempted: uniqueTestCases.size,
-      totalSolved: solvedTestCases.size
-    };
-  };
-
-  const statistics = getStatistics();
-
-  // Determine which output to show
-  const getCurrentOutput = () => {
-    if (activeTab === 'solve' && isEditable) {
-      return studentOutput;
-    }
-    return output; // Teacher's broadcast output
-  };
+  }
+  
 
   return (
-    <div className="container mx-auto px-4 py-3">
-      <div className="mb-4">
-        <div className="flex items-center flex-wrap gap-2">
-          <span className="bg-blue-600 text-white rounded-md px-3 py-2">
-            Student Room: {roomId}
-          </span>
-          
-          {/* Connection Status */}
-          <div className="flex items-center gap-2">
-            <div className={`w-3 h-3 rounded-full ${isConnected ? 'bg-green-500' : 'bg-red-500'}`}></div>
-            <span className="text-sm">{isConnected ? 'Connected' : 'Disconnected'}</span>
-            {!isConnected && (
-              <button
-                onClick={reconnect}
-                className="text-xs bg-blue-500 text-white px-2 py-1 rounded hover:bg-blue-600"
-              >
-                Reconnect
-              </button>
-            )}
-          </div>
-
-          {/* Timer */}
-          {isEditable && startTime && (
-            <div className="text-xs bg-green-100 px-2 py-1 rounded flex items-center">
-              <span>⏱️ {Math.floor(elapsedTime / 60)}:{(elapsedTime % 60).toString().padStart(2, '0')}</span>
+    <div className="d-flex flex-column min-vh-100" style={{ background: '#f5f5f9' }}>
+      {/* Header */}
+      <div className="position-fixed w-100 bg-white shadow-sm" style={{ top: 0, zIndex: 1000, height: '70px' }}>
+        <div className="d-flex align-items-center justify-content-between px-4 h-100">
+          <div className="d-flex align-items-center">
+            <Button variant="link" className="p-0 me-3" onClick={() => navigate('/student')}>
+              <ArrowLeft size={20} />
+            </Button>
+            <h4 className="mb-0 fw-bold">Live Coding Session</h4>
+            <Badge className="ms-3 px-3 py-2" style={{ background: '#8b5cf6' }}>
+              Room: {roomId?.substring(0, 8)}...
+            </Badge>
+            <div className="d-flex align-items-center ms-3">
+              <div className={`rounded-circle me-2 ${isConnected ? 'bg-success' : 'bg-warning'}`} style={{ width: '8px', height: '8px' }}></div>
+              <span className="fw-semibold">{isConnected ? 'Live' : 'Connecting...'}</span>
             </div>
-          )}
+          </div>
           
-          <div className="ml-auto flex items-center gap-2">
-            <LanguageSelector
-              value={language}
-              onChange={(value) => dispatch(setLanguage(value))}
-              disabled={!isEditable}
+          <div className="d-flex align-items-center gap-3">
+            {isEditable && startTime && (
+              <Badge className="px-3 py-2 d-flex align-items-center" style={{ background: '#8b5cf6' }}>
+                <Clock size={16} className="me-2" />
+                {Math.floor(elapsedTime / 60)}:{(elapsedTime % 60).toString().padStart(2, '0')}
+              </Badge>
+            )}
+            <LanguageSelector 
+              value={isEditable ? currentStudentLanguage : language} 
+              onChange={handleLanguageChange} 
+              disabled={false}
             />
-            <button
-              onClick={() => navigate('/student')}
-              className="text-xs bg-red-500 text-white px-3 py-1 rounded hover:bg-red-600"
-            >
+            <Button variant="outline-danger" onClick={() => navigate('/student')}>
               Leave Room
-            </button>
+            </Button>
           </div>
         </div>
       </div>
 
       {/* Alerts */}
       {error && (
-        <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mb-4">
-          {error}
-          <button onClick={() => setError(null)} className="float-right">&times;</button>
+        <div className="position-fixed" style={{ 
+          top: '80px', left: '50%', transform: 'translateX(-50%)', zIndex: 999, maxWidth: '600px'
+        }}>
+          <Alert variant="danger" className="text-center">{error}</Alert>
         </div>
       )}
 
       {success && (
-        <div className="bg-green-100 border border-green-400 text-green-700 px-4 py-3 rounded mb-4">
-          {success}
-          <button onClick={() => setSuccess(null)} className="float-right">&times;</button>
+        <div className="position-fixed" style={{ 
+          top: '80px', left: '50%', transform: 'translateX(-50%)', zIndex: 999, maxWidth: '600px'
+        }}>
+          <Alert variant="success" className="text-center">{success}</Alert>
         </div>
       )}
 
-      <div className="flex flex-wrap -mx-2">
-        {/* Left Side - Code Editor */}
-        <div className="w-full lg:w-2/3 px-2">
-          {/* Tab Navigation */}
-          <div className="mb-4">
-            <div className="border-b border-gray-200">
-              <nav className="-mb-px flex">
-                <button
-                  className={`py-2 px-4 border-b-2 font-medium text-sm ${
-                    activeTab === 'broadcast' 
-                      ? 'border-blue-500 text-blue-600' 
-                      : 'border-transparent text-gray-500 hover:text-gray-700'
-                  }`}
-                  onClick={() => handleTabChange('broadcast')}
-                >
-                  Teacher's Code {!isConnected && '(Offline)'}
-                </button>
-                <button
-                  className={`py-2 px-4 border-b-2 font-medium text-sm ${
-                    activeTab === 'solve' 
-                      ? 'border-blue-500 text-blue-600' 
-                      : 'border-transparent text-gray-500 hover:text-gray-700'
-                  }`}
-                  onClick={() => handleTabChange('solve')}
-                  disabled={!isEditable}
-                >
-                  Your Solution {isEditable ? '✓' : '🔒'}
-                </button>
-              </nav>
-            </div>
-            
+      {/* Main Content */}
+      <div className="flex-grow-1" style={{ paddingTop: '85px', paddingBottom: '20px' }}>
+        <Container fluid className="px-4">
+          <Row className="g-4">
             {/* Code Editor */}
-            <div className="border border-gray-200 rounded-lg shadow-sm mt-4">
-              <div className="bg-gray-100 py-2 px-4 flex justify-between items-center">
-                <span>
-                  {activeTab === 'broadcast' ? "Teacher's Code (Read-Only)" : "Your Solution"}
-                </span>
-                <div className="flex items-center gap-2">
-                  {activeTab === 'broadcast' && (
-                    <span className={`text-xs px-2 py-1 rounded text-white ${
-                      isConnected ? 'bg-green-500' : 'bg-red-500'
-                    }`}>
-                      {isConnected ? 'Live' : 'Offline'}
-                    </span>
-                  )}
-                  {activeTab === 'solve' && testCase && (
-                    <span className="bg-purple-500 text-white text-xs px-2 py-1 rounded">
-                      Solving: {testCase.title}
-                    </span>
+            <Col lg={8}>
+              <Card className="border-0 shadow-sm">
+                <div className="px-4 py-3" style={{ background: '#8b5cf6', color: 'white' }}>
+                  <div className="d-flex align-items-center justify-content-between">
+                    <div className="d-flex align-items-center">
+                      <div className="p-2 rounded me-3" style={{ background: 'rgba(255, 255, 255, 0.2)' }}>
+                        <i className="bi bi-code-square" style={{ fontSize: '20px' }}></i>
+                      </div>
+                      <div>
+                        <h6 className="mb-0 fw-bold">Code Editor</h6>
+                        <small className="opacity-75">
+                          {isConnected ? 'Live' : 'Offline'} • Language: {isEditable ? currentStudentLanguage : language}
+                        </small>
+                      </div>
+                    </div>
+                    
+                    <div className="btn-group">
+                      <Button 
+                        variant={activeTab === 'broadcast' ? 'light' : 'outline-light'} 
+                        onClick={() => setActiveTab('broadcast')}
+                        size="sm"
+                      >
+                        Teacher's Code
+                      </Button>
+                      <Button 
+                        variant={activeTab === 'solve' ? 'light' : 'outline-light'} 
+                        onClick={() => setActiveTab('solve')} 
+                        disabled={!isEditable}
+                        size="sm"
+                      >
+                        Your Solution {!isEditable && '🔒'}
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+                
+                <div style={{ height: '400px' }}>
+                  <CodeEditor
+                    value={activeTab === 'broadcast' ? code : studentCode}
+                    onChange={activeTab === 'broadcast' ? () => {} : setStudentCode}
+                    language={activeTab === 'broadcast' ? language : currentStudentLanguage}
+                    readOnly={activeTab === 'broadcast'}
+                    height="400px"
+                  />
+                </div>
+              </Card>
+            </Col>
+
+            {/* Input & Output */}
+            <Col lg={4}>
+              <Card className="border-0 shadow-sm">
+                <div className="px-3 py-2 text-white fw-bold d-flex align-items-center" style={{ background: '#8b5cf6' }}>
+                  <Terminal size={16} className="me-2" />
+                  Input & Output
+                </div>
+                
+                <div className="p-3">
+                  <div className="mb-3">
+                    <div className="px-3 py-2 fw-semibold text-white d-flex justify-content-between" style={{ background: '#8b5cf6', fontSize: '12px' }}>
+                      <span>INPUT</span>
+                      {selectedTestCase && (
+                        <span className="opacity-75">{selectedTestCase.title}</span>
+                      )}
+                    </div>
+                    <Form.Control
+                      as="textarea"
+                      rows={4}
+                      value={isEditable ? studentInput : input}
+                      onChange={handleInputChange}
+                      readOnly={!isEditable}
+                      placeholder={isEditable ? "Enter your test input..." : "Input from teacher..."}
+                      style={{ fontFamily: 'monospace', fontSize: '13px', resize: 'none', backgroundColor: isEditable ? 'white' : '#f8f9fa' }}
+                    />
+                  </div>
+
+                  <div className="mb-3">
+                    <div className="px-3 py-2 fw-semibold text-white d-flex justify-content-between" style={{ background: '#8b5cf6', fontSize: '12px' }}>
+                      <span>OUTPUT</span>
+                      {testResults.length > 0 && (
+                        <Badge bg={testResults.every(r => r.passed) ? "success" : "danger"}>
+                          {testResults.every(r => r.passed) ? '✓ PASSED' : '✗ FAILED'}
+                        </Badge>
+                      )}
+                    </div>
+                    <div
+                      style={{
+                        background: testResults.length > 0 ? 
+                          (testResults.every(r => r.passed) ? '#f0f9ff' : '#fef2f2') : '#f9fafb',
+                        border: `2px solid ${testResults.length > 0 ? 
+                          (testResults.every(r => r.passed) ? '#10b981' : '#ef4444') : '#e0e7ff'}`,
+                        padding: '10px',
+                        fontFamily: 'monospace',
+                        fontSize: '13px',
+                        minHeight: '120px',
+                        maxHeight: '200px',
+                        overflowY: 'auto',
+                        whiteSpace: 'pre-wrap'
+                      }}
+                    >
+                      {activeTab === 'solve' && isEditable ? studentOutput : output || 'Output will appear here...'}
+                    </div>
+                  </div>
+
+                  {/* Action Buttons */}
+                  {isEditable && activeTab === 'solve' && (
+                    <div className="d-flex gap-2">
+                      <Button
+                        variant="outline-primary"
+                        onClick={handleRunCode}
+                        disabled={isRunningTests || !studentCode?.trim()}
+                        className="flex-grow-1"
+                      >
+                        {isRunningTests ? (
+                          <>
+                            <Spinner size="sm" className="me-2" />
+                            Running...
+                          </>
+                        ) : (
+                          <>
+                            <Play size={16} className="me-2" />
+                            Run Tests
+                          </>
+                        )}
+                      </Button>
+
+                      <Button
+                        variant={testResults.length > 0 && testResults.every(r => r.passed) ? "success" : "secondary"}
+                        onClick={handleSubmit}
+                        disabled={!studentCode?.trim() || isRunningTests || isSubmitting || 
+                                 testResults.length === 0 || !testResults.every(r => r.passed)}
+                        className="flex-grow-1"
+                      >
+                        {isSubmitting ? (
+                          <>
+                            <Spinner size="sm" className="me-2" />
+                            Submitting...
+                          </>
+                        ) : testResults.length > 0 && testResults.every(r => r.passed) ? (
+                          <>
+                            <Send size={16} className="me-2" />
+                            Submit ✓
+                          </>
+                        ) : (
+                          <>
+                            <Send size={16} className="me-2" />
+                            Submit
+                          </>
+                        )}
+                      </Button>
+                    </div>
                   )}
                 </div>
-              </div>
-              <CodeEditor
-                value={activeTab === 'broadcast' ? code : studentCode}
-                onChange={activeTab === 'broadcast' ? () => {} : handleStudentCodeChange}
-                language={language}
-                readOnly={activeTab === 'broadcast'}
-                height="400px"
-              />
-            </div>
-          </div>
+              </Card>
+            </Col>
+          </Row>
 
-          {/* Test Case Information */}
-          <div className="border border-gray-200 rounded-lg shadow-sm mb-4">
-            <div className="bg-gray-100 py-2 px-4 flex justify-between items-center">
-              <span>Test Case Information</span>
-              {!isEditable && selectedTestCase && (
-                <button
-                  className="bg-green-500 hover:bg-green-600 text-white text-xs px-3 py-1 rounded"
-                  onClick={handleSolve}
-                >
-                  Start Solving
-                </button>
-              )}
-            </div>
-            <div className="p-4">
-              {selectedTestCase ? (
-                <>
-                  <h6 className="font-medium mb-2">Challenge: {selectedTestCase.title}</h6>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-3">
-                    <div>
-                      <label className="block text-sm font-medium mb-1">Input:</label>
-                      <textarea
-                        rows={3}
-                        value={selectedTestCase.input || ''}
-                        readOnly
-                        className="w-full px-3 py-2 border border-gray-300 rounded bg-gray-50 text-sm"
-                      />
+          {/* Test Cases Section */}
+          <Row className="mt-4">
+            <Col xs={12}>
+              <Card className="border-0 shadow-sm">
+                <div className="px-4 py-3" style={{ background: '#8b5cf6', color: 'white' }}>
+                  <div className="d-flex align-items-center justify-content-between">
+                    <div className="d-flex align-items-center">
+                      <div className="p-2 rounded me-3" style={{ background: 'rgba(255, 255, 255, 0.2)' }}>
+                        <Target size={20} />
+                      </div>
+                      <div>
+                        <h6 className="mb-0 fw-bold">Problem Test Cases</h6>
+                        <small className="opacity-75">
+                          Select a test case to start solving • Solved: {solvedTestCases.size}/{testCases.length}
+                        </small>
+                      </div>
                     </div>
-                    <div>
-                      <label className="block text-sm font-medium mb-1">Expected Output:</label>
-                      <textarea
-                        rows={3}
-                        value={selectedTestCase.expectedOutput || ''}
-                        readOnly
-                        className="w-full px-3 py-2 border border-gray-300 rounded bg-gray-50 text-sm"
-                      />
+                    
+                    {testCases.length > 0 && (
+                      <Badge style={{ background: 'rgba(255, 255, 255, 0.2)' }}>
+                        {testCases.length} Test Case{testCases.length !== 1 ? 's' : ''}
+                      </Badge>
+                    )}
+                  </div>
+                </div>
+                
+                <div className="p-4">
+                  {testCases.length === 0 ? (
+                    <div className="text-center py-5">
+                      <h6 className="text-muted">No test cases available</h6>
+                      <p className="text-muted mb-0">Waiting for teacher to create test cases...</p>
+                    </div>
+                  ) : (
+                    <Row className="g-3">
+                      {testCases.map((testCase, index) => (
+                        <Col md={6} lg={4} key={testCase.id}>
+                          <Card 
+                            className={`h-100 cursor-pointer border-2 ${
+                              selectedTestCase?.id === testCase.id 
+                                ? 'border-primary bg-primary bg-opacity-10' 
+                                : 'border-light'
+                            }`}
+                            onClick={() => handleTestCaseSelect(testCase)}
+                            style={{ cursor: 'pointer', transition: 'all 0.2s ease' }}
+                          >
+                            <Card.Body className="p-3">
+                              <div className="d-flex align-items-center justify-content-between mb-3">
+                                <div className="d-flex align-items-center">
+                                  <div 
+                                    className={`rounded-circle d-flex align-items-center justify-content-center me-2 ${
+                                      solvedTestCases.has(testCase.id) 
+                                        ? 'bg-success' 
+                                        : selectedTestCase?.id === testCase.id 
+                                        ? 'bg-primary' 
+                                        : 'bg-secondary'
+                                    }`}
+                                    style={{ width: '24px', height: '24px' }}
+                                  >
+                                    {solvedTestCases.has(testCase.id) ? (
+                                      <Check size={14} className="text-white" />
+                                    ) : (
+                                      <span className="text-white fw-bold" style={{ fontSize: '11px' }}>
+                                        {index + 1}
+                                      </span>
+                                    )}
+                                  </div>
+                                  <h6 className="mb-0 fw-bold">
+                                    {testCase.title || `Test Case ${index + 1}`}
+                                  </h6>
+                                </div>
+                                
+                                {solvedTestCases.has(testCase.id) && (
+                                  <Badge bg="success" className="px-2">✓ Solved</Badge>
+                                )}
+                              </div>
+
+                              <div className="mb-2">
+                                <small className="text-muted fw-semibold">Input:</small>
+                                <div className="small bg-light p-2 rounded mt-1" style={{ fontFamily: 'monospace', fontSize: '11px' }}>
+                                  {testCase.input || 'No input'}
+                                </div>
+                              </div>
+
+                              <div className="mb-3">
+                                <small className="text-muted fw-semibold">Expected Output:</small>
+                                <div className="small bg-light p-2 rounded mt-1" style={{ fontFamily: 'monospace', fontSize: '11px' }}>
+                                  {testCase.expectedOutput || 'No expected output'}
+                                </div>
+                              </div>
+
+                              <div className="d-flex gap-2">
+                                <Button
+                                  size="sm"
+                                  variant={selectedTestCase?.id === testCase.id ? 'primary' : 'outline-primary'}
+                                  onClick={(e) => {
+                                    e.stopPropagation()
+                                    handleTestCaseSelect(testCase)
+                                  }}
+                                  className="flex-grow-1"
+                                >
+                                  {selectedTestCase?.id === testCase.id ? 'Selected' : 'Select'}
+                                </Button>
+                                
+                                {selectedTestCase?.id === testCase.id && !solvedTestCases.has(testCase.id) && (
+                                  <Button
+                                    size="sm"
+                                    variant="success"
+                                    onClick={(e) => {
+                                      e.stopPropagation()
+                                      handleSolve()
+                                    }}
+                                    disabled={isEditable}
+                                  >
+                                    {isEditable ? 'Solving...' : 'Solve'}
+                                  </Button>
+                                )}
+                              </div>
+                            </Card.Body>
+                          </Card>
+                        </Col>
+                      ))}
+                    </Row>
+                  )}
+                </div>
+              </Card>
+            </Col>
+          </Row>
+
+          {/* Test Results Section */}
+          {testResults.length > 0 && (
+            <Row className="mt-4">
+              <Col xs={12}>
+                <Card className="border-0 shadow-sm">
+                  <div className="px-4 py-3" style={{ 
+                    background: testResults.every(r => r.passed) ? '#10b981' : '#ef4444', 
+                    color: 'white' 
+                  }}>
+                    <div className="d-flex align-items-center">
+                      <div className="p-2 rounded me-3" style={{ background: 'rgba(255, 255, 255, 0.2)' }}>
+                        {testResults.every(r => r.passed) ? <CheckCircle size={20} /> : <X size={20} />}
+                      </div>
+                      <div>
+                        <h6 className="mb-0 fw-bold">
+                          Test Results: {testResults.every(r => r.passed) ? 'All Passed ✅' : 'Failed ❌'}
+                        </h6>
+                        <small className="opacity-75">
+                          {testResults.filter(r => r.passed).length}/{testResults.length} test cases passed
+                        </small>
+                      </div>
                     </div>
                   </div>
                   
-                  {isEditable && activeTab === 'solve' && (
-                    <div className="flex justify-between items-center">
-                      <div className="text-sm text-gray-600">
-                        {startTime && `Time: ${Math.floor(elapsedTime / 60)}:${(elapsedTime % 60).toString().padStart(2, '0')}`}
-                      </div>
-                      <div className="flex gap-2">
-                        <button
-                          onClick={handleRunCode}
-                          disabled={isRunning || !((studentCode || '')?.trim() || '')}
-                          className="bg-yellow-500 hover:bg-yellow-600 text-white px-4 py-2 rounded disabled:bg-yellow-300 disabled:cursor-not-allowed"
-                        >
-                          {isRunning ? 'Running...' : 'Test Code'}
-                        </button>
-                        <button
-                          onClick={handleSubmit}
-                          disabled={isSubmitting || !((studentCode || '')?.trim() || '')}
-                          className="bg-green-500 hover:bg-green-600 text-white px-4 py-2 rounded disabled:bg-green-300 disabled:cursor-not-allowed"
-                        >
-                          {isSubmitting ? 'Submitting...' : 'Submit'}
-                        </button>
-                      </div>
-                    </div>
-                  )}
-                </>
-              ) : (
-                <div className="text-center py-4 text-gray-500">
-                  <p>Select a test case to get started</p>
-                  <p className="text-sm mt-1">Choose from the available test cases on the right</p>
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* Output */}
-          <div className="border border-gray-200 rounded-lg shadow-sm">
-            <div className="bg-gray-100 py-2 px-4 flex justify-between items-center">
-              <span className="text-gray-600">Output</span>
-              {activeTab === 'broadcast' && (
-                <span className="text-xs text-gray-500">Teacher's Output</span>
-              )}
-              {activeTab === 'solve' && (
-                <span className="text-xs text-gray-500">Your Code Output</span>
-              )}
-            </div>
-            <div className="p-4">
-              <textarea
-                rows={4}
-                value={getCurrentOutput()}
-                readOnly
-                className="w-full px-3 py-2 border border-gray-300 rounded bg-gray-50 text-sm font-mono"
-                placeholder="Output will appear here after running code"
-              />
-              {selectedTestCase && activeTab === 'solve' && studentOutput && (
-                <div className="mt-2 text-xs">
-                  <div className="flex justify-between items-center">
-                    <span className="text-gray-600">Expected vs Actual:</span>
-                    <span className={`font-medium ${
-                      ((studentOutput || '')?.trim() || '') === ((selectedTestCase?.expectedOutput || '')?.trim() || '') 
-                        ? 'text-green-600' 
-                        : 'text-red-600'
-                    }`}>
-                      {((studentOutput || '')?.trim() || '') === ((selectedTestCase?.expectedOutput || '')?.trim() || '') ? 'MATCH ✓' : 'NO MATCH ✗'}
-                    </span>
+                  <div className="p-4">
+                    {testResults.map((result, index) => (
+                      <Card key={index} className={`mb-3 border-2 ${result.passed ? 'border-success' : 'border-danger'}`}>
+                        <Card.Body className="p-3">
+                          <div className="d-flex align-items-center justify-content-between mb-3">
+                            <h6 className="mb-0 fw-bold d-flex align-items-center">
+                              {result.passed ? (
+                                <Check className="text-success me-2" size={16} />
+                              ) : (
+                                <X className="text-danger me-2" size={16} />
+                              )}
+                              Test Case {index + 1}: {result.passed ? 'Passed' : 'Failed'}
+                            </h6>
+                            <Badge bg={result.passed ? 'success' : 'danger'}>
+                              {result.passed ? '✓ PASS' : '✗ FAIL'}
+                            </Badge>
+                          </div>
+                          
+                          <Row>
+                            <Col md={4}>
+                              <small className="text-muted fw-semibold">Input:</small>
+                              <div className="bg-light p-2 rounded mt-1" style={{ fontFamily: 'monospace', fontSize: '12px' }}>
+                                {result.input || 'No input'}
+                              </div>
+                            </Col>
+                            <Col md={4}>
+                              <small className="text-muted fw-semibold">Expected Output:</small>
+                              <div className="bg-light p-2 rounded mt-1" style={{ fontFamily: 'monospace', fontSize: '12px' }}>
+                                {result.expectedOutput || 'No expected output'}
+                              </div>
+                            </Col>
+                            <Col md={4}>
+                              <small className="text-muted fw-semibold">Your Output:</small>
+                              <div 
+                                className={`p-2 rounded mt-1 ${
+                                  result.passed 
+                                    ? 'bg-success bg-opacity-10 border border-success' 
+                                    : 'bg-danger bg-opacity-10 border border-danger'
+                                }`} 
+                                style={{ fontFamily: 'monospace', fontSize: '12px' }}
+                              >
+                                {result.actualOutput || 'No output'}
+                              </div>
+                            </Col>
+                          </Row>
+                          
+                          {result.error && (
+                            <div className="mt-3">
+                              <small className="text-muted fw-semibold">Error:</small>
+                              <div className="bg-danger bg-opacity-10 border border-danger p-2 rounded mt-1 text-danger" 
+                                   style={{ fontFamily: 'monospace', fontSize: '12px' }}>
+                                {result.error}
+                              </div>
+                            </div>
+                          )}
+                        </Card.Body>
+                      </Card>
+                    ))}
                   </div>
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-
-        {/* Right Side - Progress & Test Cases */}
-        <div className="w-full lg:w-1/3 px-2">
-          {/* Progress */}
-          <div className="border border-gray-200 rounded-lg shadow-sm mb-4">
-            <div className="bg-gray-100 py-2 px-4">
-              <span className="text-gray-600">Your Progress</span>
-            </div>
-            <div className="p-4">
-              <div className="grid grid-cols-3 gap-2 mb-3">
-                <div className="bg-blue-50 p-3 rounded text-center">
-                  <div className="text-xl font-bold text-blue-600">{statistics.totalActive}</div>
-                  <div className="text-xs text-gray-600">Active</div>
-                  <div className="text-xs text-gray-500">(Last {submissions?.activeTimeWindowMinutes || 30} min)</div>
-                </div>
-                <div className="bg-yellow-50 p-3 rounded text-center">
-                  <div className="text-xl font-bold text-yellow-600">{statistics.totalAttempted}</div>
-                  <div className="text-xs text-gray-600">Attempted</div>
-                </div>
-                <div className="bg-green-50 p-3 rounded text-center">
-                  <div className="text-xl font-bold text-green-600">{statistics.totalSolved}</div>
-                  <div className="text-xs text-gray-600">Solved</div>
-                </div>
-              </div>
-              
-              {/* Progress Bar */}
-              <div className="w-full bg-gray-200 rounded-full h-3 mb-2">
-                <div 
-                  className="bg-green-600 h-3 rounded-full transition-all duration-500" 
-                  style={{ 
-                    width: `${statistics.totalActive > 0 ? (statistics.totalSolved / statistics.totalActive) * 100 : 0}%` 
-                  }}
-                />
-              </div>
-              <div className="text-xs text-center text-gray-500">
-                {statistics.totalSolved} of {statistics.totalActive} completed
-                {statistics.totalActive > 0 && (
-                  <span className="ml-1">
-                    ({Math.round((statistics.totalSolved / statistics.totalActive) * 100)}%)
-                  </span>
-                )}
-              </div>
-            </div>
-          </div>
-          
-          {/* Available Test Cases */}
-          <div className="border border-gray-200 rounded-lg shadow-sm">
-            <div className="bg-gray-100 py-2 px-4 flex justify-between items-center">
-              <span className="text-gray-600">Test Cases ({testCases?.length || 0})</span>
-              <button
-                onClick={refetchTestCases}
-                className="text-xs bg-blue-500 text-white px-2 py-1 rounded hover:bg-blue-600"
-                title="Refresh test cases"
-              >
-                🔄
-              </button>
-            </div>
-            <div className="p-4">
-              {!testCases || testCases.length === 0 ? (
-                <div className="text-center py-6 text-gray-500">
-                  <div className="text-4xl mb-2">📝</div>
-                  <p className="font-medium">No test cases available</p>
-                  <p className="text-sm mt-1">Wait for your teacher to publish test cases</p>
-                  <button
-                    onClick={refetchTestCases}
-                    className="mt-3 bg-blue-500 text-white px-4 py-2 rounded text-sm hover:bg-blue-600 transition-colors"
-                  >
-                    Check for Updates
-                  </button>
-                </div>
-              ) : (
-                <div className="space-y-3 max-h-80 overflow-y-auto">
-                  {testCases.map((tc, index) => {
-                    const isNew = newTestCases[tc.id];
-                    const isSolved = solvedTestCaseIds.has(tc.id);
-                    const isSelected = selectedTestCase?.id === tc.id;
-                    
-                    return (
-                      <button
-                        key={tc.id}
-                        className={`w-full text-left px-4 py-3 rounded-lg border-2 transition-all duration-200 ${
-                          isSelected 
-                            ? 'bg-blue-500 text-white border-blue-600 shadow-lg transform scale-105' 
-                            : isNew 
-                              ? 'bg-yellow-50 border-yellow-400 hover:bg-yellow-100 animate-pulse' 
-                              : isSolved
-                                ? 'bg-green-50 border-green-300 hover:bg-green-100'
-                                : 'bg-gray-50 border-gray-200 hover:bg-gray-100 hover:border-gray-300'
-                        }`}
-                        onClick={() => handleTestCaseSelect(tc)}
-                      >
-                        <div className="flex justify-between items-center mb-2">
-                          <span className="font-medium text-sm">
-                            {index + 1}. {tc.title}
-                          </span>
-                          <div className="flex gap-1">
-                            {isNew && (
-                              <span className="text-xs bg-yellow-500 text-white px-2 py-1 rounded-full animate-pulse font-bold">
-                                NEW
-                              </span>
-                            )}
-                            {isSolved && (
-                              <span className="text-xs bg-green-500 text-white px-2 py-1 rounded-full font-bold">
-                                ✓ SOLVED
-                              </span>
-                            )}
-                            {isSelected && (
-                              <span className="text-xs bg-blue-700 text-white px-2 py-1 rounded-full font-bold">
-                                ACTIVE
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                        <div className={`text-xs ${isSelected ? 'opacity-90' : 'opacity-75'}`}>
-                          <div className="truncate">
-                            <strong>Expected:</strong> {tc.expectedOutput?.substring(0, 40)}
-                            {tc.expectedOutput?.length > 40 && '...'}
-                          </div>
-                          <div className="mt-1 text-gray-500">
-                            Created: {new Date(tc.createdAt).toLocaleTimeString()}
-                          </div>
-                        </div>
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
+                </Card>
+              </Col>
+            </Row>
+          )}
+        </Container>
       </div>
     </div>
-  );
-};
+  )
+}
 
-export default StudentRoom;
+export default StudentRoom

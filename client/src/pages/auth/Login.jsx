@@ -3,6 +3,8 @@ import { Link, useNavigate } from 'react-router-dom'
 import { useDispatch, useSelector } from 'react-redux'
 import { useLoginMutation } from '../../redux/api/authApi'
 import { setCredentials } from '../../redux/slices/authSlice'
+import { Container, Row, Col, Card, Form, Button, Alert, Spinner } from 'react-bootstrap'
+import { Mail, Lock, LogIn } from 'lucide-react'
 
 const Login = () => {
   const [email, setEmail] = useState('')
@@ -11,96 +13,143 @@ const Login = () => {
 
   const dispatch = useDispatch()
   const navigate = useNavigate()
-
   const [login, { isLoading }] = useLoginMutation()
   const { userInfo } = useSelector((state) => state.auth)
 
   useEffect(() => {
-    // If already logged in, redirect to appropriate dashboard
     if (userInfo) {
-      if (userInfo.role === 'TEACHER') {
-        navigate('/teacher')
-      } else {
-        navigate('/student')
-      }
+      navigate(userInfo.role === 'TEACHER' ? '/teacher' : '/student')
     }
   }, [userInfo, navigate])
 
   const submitHandler = async (e) => {
     e.preventDefault()
     setError(null)
-
     try {
       const res = await login({ email, password }).unwrap()
       dispatch(setCredentials(res))
-
-      // Redirect based on role
-      if (res.role === 'TEACHER') {
-        navigate('/teacher')
-      } else {
-        navigate('/student')
-      }
+      navigate(res.role === 'TEACHER' ? '/teacher' : '/student')
     } catch (err) {
-      setError(err?.data?.message || 'An error occurred during login')
+      setError(err?.data?.message || 'Login failed')
     }
   }
 
   return (
-    <div className="flex justify-center items-center min-h-[80vh]">
-      <div className="w-full max-w-md">
-        <div className="bg-white p-6 rounded-lg shadow-md auth-container">
-          <h2 className="text-2xl font-bold text-center mb-6 text-dark">Sign In</h2>
-          
-          {error && (
-            <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mb-4" role="alert">
-              <span>{error}</span>
-            </div>
-          )}
-          
-          <form onSubmit={submitHandler}>
-            <div className="mb-4">
-              <label htmlFor="email" className="block text-gray-700 text-sm font-medium mb-2">Email Address</label>
-              <input
-                type="email"
-                id="email"
-                placeholder="Enter email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                required
-                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
-              />
-            </div>
+    <div style={{
+      minHeight: '100vh',
+      width: '100vw',
+      background: 'linear-gradient(135deg, #f5f3ff, #ede9fe, #ddd6fe)',
+      display: 'flex',
+      alignItems: 'center',
+      padding: '20px',
+      margin: 0,
+      position: 'fixed',
+      top: 0,
+      left: 0,
+      overflow: 'auto'
+    }}>
+      <Container>
+        <Row className="justify-content-center">
+          <Col md={5} lg={4}>
+            <Card style={{
+              borderRadius: '24px',
+              border: 'none',
+              boxShadow: '0 20px 60px rgba(139, 92, 246, 0.15)'
+            }}>
+              <Card.Body className="p-5">
+                <div className="text-center mb-4">
+                  <div style={{
+                    background: 'linear-gradient(135deg, #8b5cf6, #a855f7)',
+                    borderRadius: '20px',
+                    width: '60px',
+                    height: '60px',
+                    margin: '0 auto 20px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center'
+                  }}>
+                    <LogIn size={28} color="white" />
+                  </div>
+                  <h2 style={{ fontSize: '28px', fontWeight: '700', color: '#1f2937', marginBottom: '8px' }}>
+                    Welcome Back
+                  </h2>
+                  <p style={{ color: '#6b7280', marginBottom: '30px' }}>Sign in to continue</p>
+                </div>
 
-            <div className="mb-4">
-              <label htmlFor="password" className="block text-gray-700 text-sm font-medium mb-2">Password</label>
-              <input
-                type="password"
-                id="password"
-                placeholder="Enter password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                required
-                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
-              />
-            </div>
+                {error && (
+                  <Alert variant="danger" style={{ borderRadius: '12px', backgroundColor: '#fef2f2', border: 'none', color: '#dc2626' }}>
+                    {error}
+                  </Alert>
+                )}
 
-            <button
-              type="submit"
-              className={`w-full bg-primary text-white py-2 px-4 rounded-md hover:bg-opacity-90 transition-colors mt-4 ${isLoading ? 'opacity-70 cursor-not-allowed' : ''}`}
-              disabled={isLoading}
-            >
-              {isLoading ? 'Signing in...' : 'Sign In'}
-            </button>
-          </form>
+                <Form onSubmit={submitHandler}>
+                  <Form.Group className="mb-3">
+                    <Form.Label style={{ fontWeight: '600', color: '#374151', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <Mail size={16} color="#8b5cf6" /> Email
+                    </Form.Label>
+                    <Form.Control
+                      type="email"
+                      placeholder="Enter your email"
+                      value={email}
+                      onChange={(e) => setEmail(e.target.value)}
+                      required
+                      style={{
+                        borderRadius: '12px',
+                        border: '2px solid #e5e7eb',
+                        padding: '12px 16px',
+                        fontSize: '16px'
+                      }}
+                    />
+                  </Form.Group>
 
-          <div className="mt-6 text-center">
-            <span className="text-gray-600">New User?{' '}</span>
-            <Link to="/register" className="text-primary hover:underline">
-              Register
-            </Link>
-          </div>
-        </div>
-      </div>
+                  <Form.Group className="mb-4">
+                    <Form.Label style={{ fontWeight: '600', color: '#374151', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <Lock size={16} color="#8b5cf6" /> Password
+                    </Form.Label>
+                    <Form.Control
+                      type="password"
+                      placeholder="Enter your password"
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      required
+                      style={{
+                        borderRadius: '12px',
+                        border: '2px solid #e5e7eb',
+                        padding: '12px 16px',
+                        fontSize: '16px'
+                      }}
+                    />
+                  </Form.Group>
+
+                  <Button
+                    type="submit"
+                    disabled={isLoading}
+                    className="w-100"
+                    style={{
+                      background: 'linear-gradient(135deg, #8b5cf6, #a855f7)',
+                      border: 'none',
+                      borderRadius: '12px',
+                      padding: '12px',
+                      fontSize: '16px',
+                      fontWeight: '600',
+                      marginBottom: '20px'
+                    }}
+                  >
+                    {isLoading ? <><Spinner size="sm" className="me-2" />Signing in...</> : 'Sign In'}
+                  </Button>
+                </Form>
+
+                <div className="text-center">
+                  <span style={{ color: '#6b7280' }}>New to Skelo? </span>
+                  <Link to="/register" style={{ color: '#8b5cf6', textDecoration: 'none', fontWeight: '600' }}>
+                    Create Account
+                  </Link>
+                </div>
+              </Card.Body>
+            </Card>
+          </Col>
+        </Row>
+      </Container>
     </div>
   )
 }

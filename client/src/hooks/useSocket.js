@@ -1,438 +1,281 @@
-import { useEffect, useState, useCallback, useRef } from 'react'
-import { useDispatch, useSelector } from 'react-redux'
-import { io } from 'socket.io-client'
-import {  updateEditorState, setCode, setOutput, setLanguage, setInput } from '../redux/slices/editorSlice'
-
-// Create socket instance with better configuration
-let socket = null
-
-const createSocket = () => {
-  if (socket && socket.connected) {
-    return socket
-  }
-  
-  socket = io(import.meta.env.VITE_API_URL || 'http://localhost:5000', {
-    autoConnect: false,
-    withCredentials: true,
-    transports: ['websocket', 'polling'],
-    upgrade: true,
-    rememberUpgrade: true,
-    timeout: 20000,
-    reconnection: true,
-    reconnectionAttempts: 10,
-    reconnectionDelay: 1000,
-    reconnectionDelayMax: 5000,
-    maxReconnectionAttempts: 10,
-    randomizationFactor: 0.5,
-    extraHeaders: {
-      'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Credentials': 'true'
-    },
-    forceNew: true,
-  })
-  
-  return socket
-}
+// client/src/hooks/useSocket.js - Enhanced for Real-time Broadcasting
+import { useEffect, useState, useCallback, useRef } from 'react';
+import { useDispatch } from 'react-redux';
+import io from 'socket.io-client';
 
 const useSocket = (roomId) => {
-  const dispatch = useDispatch()
-  const [isConnected, setIsConnected] = useState(false)
-  const [activeStudents, setActiveStudents] = useState([])
-  const [connectionAttempts, setConnectionAttempts] = useState(0)
-  const [lastActivity, setLastActivity] = useState(Date.now())
+  const [socket, setSocket] = useState(null);
+  const [isConnected, setIsConnected] = useState(false);
+  const [activeStudents, setActiveStudents] = useState([]);
+  const [connectionAttempts, setConnectionAttempts] = useState(0);
+  const dispatch = useDispatch();
   
-  const { isEditable } = useSelector((state) => state.editor)
-  const roomIdRef = useRef(roomId)
-  const reconnectTimeoutRef = useRef(null)
-  const heartbeatIntervalRef = useRef(null)
-  const isEditableRef = useRef(isEditable)
+  // Refs to prevent stale closures
+  const roomIdRef = useRef(roomId);
+  const socketRef = useRef(null);
+  const reconnectTimeoutRef = useRef(null);
+  const heartbeatIntervalRef = useRef(null);
 
-  // Update refs when values change
   useEffect(() => {
-    roomIdRef.current = roomId
-    isEditableRef.current = isEditable
-  }, [roomId, isEditable])
-
-  // Heartbeat to keep connection alive
-  const startHeartbeat = useCallback(() => {
-    if (heartbeatIntervalRef.current) {
-      clearInterval(heartbeatIntervalRef.current)
-    }
-    
-    heartbeatIntervalRef.current = setInterval(() => {
-      if (socket && socket.connected && roomIdRef.current) {
-        socket.emit('heartbeat', { roomId: roomIdRef.current, timestamp: Date.now() })
-        setLastActivity(Date.now())
-      }
-    }, 30000)
-  }, [])
-
-  const stopHeartbeat = useCallback(() => {
-    if (heartbeatIntervalRef.current) {
-      clearInterval(heartbeatIntervalRef.current)
-      heartbeatIntervalRef.current = null
-    }
-  }, [])
-
-  // Enhanced connection function
-  const connectSocket = useCallback(() => {
-    if (!roomId) return
-
-    try {
-      socket = createSocket()
-      
-      // Connection event handlers
-      const onConnect = () => {
-        console.log('Socket connected:', socket.id)
-        setIsConnected(true)
-        setConnectionAttempts(0)
-        
-        // Join room immediately after connection
-        if (roomIdRef.current) {
-          socket.emit('join-room', { 
-            roomId: roomIdRef.current,
-            timestamp: Date.now(),
-            userAgent: navigator.userAgent,
-            sessionId: sessionStorage.getItem('sessionId') || Date.now().toString()
-          })
-          
-          // Start heartbeat
-          startHeartbeat()
-        }
-      }
-
-      const onDisconnect = (reason) => {
-        console.log('Socket disconnected:', reason)
-        setIsConnected(false)
-        stopHeartbeat()
-        
-        // Auto-reconnect for certain disconnect reasons
-        if (reason === 'io server disconnect') {
-          setTimeout(() => {
-            if (socket && roomIdRef.current) {
-              socket.connect()
-            }
-          }, 1000)
-        }
-      }
-
-      const onConnectError = (error) => {
-        console.error('Socket connection error:', error)
-        setIsConnected(false)
-        setConnectionAttempts(prev => prev + 1)
-        
-        // Exponential backoff for reconnection
-        const delay = Math.min(1000 * Math.pow(2, connectionAttempts), 10000)
-        reconnectTimeoutRef.current = setTimeout(() => {
-          if (socket && !socket.connected) {
-            socket.connect()
-          }
-        }, delay)
-      }
-
-      const onReconnect = (attemptNumber) => {
-        console.log('Socket reconnected after', attemptNumber, 'attempts')
-        setConnectionAttempts(0)
-        
-        // Re-join room after reconnection
-        if (roomIdRef.current) {
-          socket.emit('join-room', { 
-            roomId: roomIdRef.current,
-            timestamp: Date.now(),
-            reconnected: true
-          })
-        }
-      }
-
-      const onReconnectError = (error) => {
-        console.error('Socket reconnection error:', error)
-        setConnectionAttempts(prev => prev + 1)
-      }
-
-      // Editor state update handlers
-      const onCodeUpdate = ({ code, timestamp }) => {
-        if (!isEditableRef.current && code !== undefined) {
-          dispatch(setCode(code))
-          setLastActivity(Date.now())
-        }
-      }
-
-      const onOutputUpdate = ({ output, timestamp }) => {
-        if (output !== undefined) {
-          dispatch(setOutput(output))
-          setLastActivity(Date.now())
-        }
-      }
-      
-      const onLanguageUpdate = ({ language, timestamp }) => {
-        if (language !== undefined) {
-          dispatch(setLanguage(language))
-          setLastActivity(Date.now())
-        }
-      }
-
-      const onInputUpdate = ({ input, timestamp }) => {
-        if (input !== undefined) {
-          dispatch(setInput(input))
-          setLastActivity(Date.now())
-        }
-      }
-
-      // Fixed: Ensure activeStudents is always an array
-      const onStudentUpdate = ({ students, teachers, timestamp }) => {
-        const studentsArray = Array.isArray(students) ? students : []
-        const teachersArray = Array.isArray(teachers) ? teachers : []
-        
-        // Combine students and teachers for activeStudents
-        const allUsers = [...studentsArray, ...teachersArray]
-        setActiveStudents(allUsers)
-        setLastActivity(Date.now())
-      }
-      
-      const onRoomDeleted = ({ roomId, message }) => {
-        if (roomId === roomIdRef.current) {
-          // Notify user that the room has been deleted
-          const event = new CustomEvent('room-deleted', {
-            detail: {
-              roomId,
-              message: message || 'This room has been deleted by the teacher',
-              timestamp: new Date().toISOString()
-            }
-          })
-          window.dispatchEvent(event)
-          
-          // Disconnect from the room
-          if (socket) {
-            socket.emit('leave-room', { roomId })
-            stopHeartbeat()
-          }
-          
-          // Redirect to dashboard (handled by component listening to the event)
-        }
-      }
-      
-      const onTestCaseCreated = ({ testCase, timestamp }) => {
-        if (testCase) {
-          const event = new CustomEvent('test-case-created', { 
-            detail: {
-              ...testCase,
-              timestamp: timestamp || new Date().toISOString(),
-              isNew: true
-            }
-          })
-          window.dispatchEvent(event)
-          
-          // Show notification
-          if ('Notification' in window && Notification.permission === 'granted') {
-            new Notification('New Test Case', {
-              body: `A new test case "${testCase.title || 'Untitled'}" has been published`,
-              icon: '/favicon.ico',
-              tag: 'test-case-' + testCase.id
-            })
-          }
-          
-          setLastActivity(Date.now())
-        }
-      }
-
-      const onRoomJoined = ({ success, message, roomInfo }) => {
-        console.log('Room joined:', { success, message, roomInfo })
-        if (success && roomInfo) {
-          // Initialize activeStudents with empty array if not provided
-          setActiveStudents(Array.isArray(roomInfo.students) ? roomInfo.students : [])
-        }
-      }
-
-      const onRoomError = ({ error, message }) => {
-        console.error('Room error:', { error, message })
-      }
-
-      // Register all event listeners
-      socket.on('connect', onConnect)
-      socket.on('disconnect', onDisconnect)
-      socket.on('connect_error', onConnectError)
-      socket.on('reconnect', onReconnect)
-      socket.on('reconnect_error', onReconnectError)
-      
-      socket.on('code-update', onCodeUpdate)
-      socket.on('html-update', onCodeUpdate)
-      socket.on('css-update', onCodeUpdate)
-      socket.on('js-update', onCodeUpdate)
-      socket.on('output-update', onOutputUpdate)
-      socket.on('language-update', onLanguageUpdate)
-      socket.on('input-update', onInputUpdate)
-      socket.on('student-update', onStudentUpdate)
-      socket.on('test-case-created', onTestCaseCreated)
-      socket.on('room-joined', onRoomJoined)
-      socket.on('room-error', onRoomError)
-      socket.on('room-deleted', onRoomDeleted)
-
-      // Connect the socket
-      if (!socket.connected) {
-        socket.connect()
-      }
-
-      // Cleanup function
-      return () => {
-        stopHeartbeat()
-        
-        if (reconnectTimeoutRef.current) {
-          clearTimeout(reconnectTimeoutRef.current)
-        }
-
-        // Remove event listeners
-        socket.off('connect', onConnect)
-        socket.off('disconnect', onDisconnect)
-        socket.off('connect_error', onConnectError)
-        socket.off('reconnect', onReconnect)
-        socket.off('reconnect_error', onReconnectError)
-        
-        socket.off('code-update', onCodeUpdate)
-        socket.off('html-update', onCodeUpdate)
-        socket.off('css-update', onCodeUpdate)
-        socket.off('js-update', onCodeUpdate)
-        socket.off('output-update', onOutputUpdate)
-        socket.off('language-update', onLanguageUpdate)
-        socket.off('input-update', onInputUpdate)
-        socket.off('student-update', onStudentUpdate)
-        socket.off('test-case-created', onTestCaseCreated)
-        socket.off('room-joined', onRoomJoined)
-        socket.off('room-deleted', onRoomDeleted)
-        socket.off('room-error', onRoomError)
-        
-        // Leave room
-        if (roomIdRef.current && socket.connected) {
-          socket.emit('leave-room', { 
-            roomId: roomIdRef.current,
-            timestamp: Date.now()
-          })
-        }
-      }
-    } catch (error) {
-      console.error('Error setting up socket connection:', error)
-      setIsConnected(false)
-    }
-  }, [roomId, startHeartbeat, stopHeartbeat, connectionAttempts]);
+    roomIdRef.current = roomId;
+  }, [roomId]);
 
   // Initialize socket connection
   useEffect(() => {
-    if (!roomId) return
+    if (!roomId) return;
 
-    const cleanup = connectSocket()
-    
-    return cleanup
-  }, [roomId, connectSocket]);
+    const initializeSocket = () => {
+      console.log(`Initializing socket connection for room: ${roomId}`);
+      
+      const newSocket = io(import.meta.env.VITE_SERVER_URL || 'http://localhost:5000', {
+        transports: ['websocket', 'polling'],
+        timeout: 10000,
+        forceNew: true,
+        autoConnect: true,
+        reconnection: true,
+        reconnectionAttempts: 5,
+        reconnectionDelay: 1000,
+        reconnectionDelayMax: 5000
+      });
 
-  // Cleanup on unmount
-  useEffect(() => {
+      socketRef.current = newSocket;
+      setSocket(newSocket);
+
+      // Connection event handlers
+      newSocket.on('connect', () => {
+        console.log('Socket connected:', newSocket.id);
+        setIsConnected(true);
+        setConnectionAttempts(0);
+        
+        // Join room immediately on connection
+        const sessionId = sessionStorage.getItem('sessionId');
+        if (sessionId && roomIdRef.current) {
+          newSocket.emit('join-room', {
+            roomId: roomIdRef.current,
+            sessionId,
+            timestamp: Date.now(),
+            userAgent: navigator.userAgent
+          });
+        }
+
+        // Start heartbeat to maintain connection
+        startHeartbeat(newSocket);
+      });
+
+      newSocket.on('disconnect', (reason) => {
+        console.log('Socket disconnected:', reason);
+        setIsConnected(false);
+        stopHeartbeat();
+        
+        // Auto-reconnect for certain disconnect reasons
+        if (reason === 'io server disconnect' || reason === 'transport close') {
+          setTimeout(() => attemptReconnect(), 2000);
+        }
+      });
+
+      newSocket.on('connect_error', (error) => {
+        console.error('Socket connection error:', error);
+        setIsConnected(false);
+        setConnectionAttempts(prev => prev + 1);
+      });
+
+      newSocket.on('reconnect', () => {
+        console.log('Socket reconnected');
+        setIsConnected(true);
+        setConnectionAttempts(0);
+      });
+
+      // Room event handlers
+      newSocket.on('room-update', (data) => {
+        setActiveStudents(data.students || []);
+      });
+
+      newSocket.on('room-error', (data) => {
+        console.error('Room error:', data.error);
+      });
+
+      return newSocket;
+    };
+
+    const newSocket = initializeSocket();
+
+    // Cleanup on unmount
     return () => {
-      stopHeartbeat()
       if (reconnectTimeoutRef.current) {
-        clearTimeout(reconnectTimeoutRef.current)
+        clearTimeout(reconnectTimeoutRef.current);
+      }
+      stopHeartbeat();
+      
+      if (newSocket) {
+        newSocket.disconnect();
       }
       
-      if (socket && socket.connected) {
-        if (roomIdRef.current) {
-          socket.emit('leave-room', { 
-            roomId: roomIdRef.current,
-            timestamp: Date.now()
-          })
-        }
-        socket.disconnect()
-      }
-    }
-  }, [stopHeartbeat]);
-
-  // Enhanced emit functions with error handling and retry logic
-  const createEmitFunction = useCallback((eventName) => {
-    return (data) => {
-      if (!socket || !socket.connected || !roomId) {
-        console.warn(`Cannot emit ${eventName}: socket not connected`)
-        return false
-      }
-
-      try {
-        const payload = {
-          roomId,
-          ...data,
-          timestamp: Date.now(),
-          sessionId: sessionStorage.getItem('sessionId') || Date.now().toString()
-        }
-        
-        socket.emit(eventName, payload, (ack) => {
-          if (ack && ack.error) {
-            console.error(`Error emitting ${eventName}:`, ack.error)
-          }
-        })
-        
-        setLastActivity(Date.now())
-        return true
-      } catch (error) {
-        console.error(`Error emitting ${eventName}:`, error)
-        return false
-      }
-    }
+      socketRef.current = null;
+      setSocket(null);
+      setIsConnected(false);
+    };
   }, [roomId]);
 
-  // Emit functions
+  // Heartbeat to maintain connection
+  const startHeartbeat = (socket) => {
+    stopHeartbeat(); // Clear any existing heartbeat
+    
+    heartbeatIntervalRef.current = setInterval(() => {
+      if (socket && socket.connected) {
+        socket.emit('ping', { timestamp: Date.now() });
+      }
+    }, 25000); // Send ping every 25 seconds
+  };
+
+  const stopHeartbeat = () => {
+    if (heartbeatIntervalRef.current) {
+      clearInterval(heartbeatIntervalRef.current);
+      heartbeatIntervalRef.current = null;
+    }
+  };
+
+  // Reconnection logic
+  const attemptReconnect = useCallback(() => {
+    if (connectionAttempts >= 5) {
+      console.error('Max reconnection attempts reached');
+      return;
+    }
+
+    if (reconnectTimeoutRef.current) {
+      clearTimeout(reconnectTimeoutRef.current);
+    }
+
+    reconnectTimeoutRef.current = setTimeout(() => {
+      console.log(`Attempting to reconnect... (${connectionAttempts + 1}/5)`);
+      
+      if (socketRef.current) {
+        socketRef.current.disconnect();
+      }
+      
+      // Reinitialize socket
+      const newSocket = io(import.meta.env.VITE_SERVER_URL || 'http://localhost:5000', {
+        transports: ['websocket', 'polling'],
+        forceNew: true
+      });
+
+      socketRef.current = newSocket;
+      setSocket(newSocket);
+    }, Math.min(1000 * Math.pow(2, connectionAttempts), 10000)); // Exponential backoff
+  }, [connectionAttempts]);
+
+  const reconnect = useCallback(() => {
+    console.log('Manual reconnect triggered');
+    setConnectionAttempts(0);
+    attemptReconnect();
+  }, [attemptReconnect]);
+
+  // REAL-TIME BROADCASTING FUNCTIONS - Enhanced for instant updates
   const emitCodeChange = useCallback((code) => {
-    return createEmitFunction('code-change')({ code })
-  }, [createEmitFunction]);
+    if (socketRef.current && isConnected && roomIdRef.current) {
+      const sessionId = sessionStorage.getItem('sessionId');
+      socketRef.current.emit('code-change', {
+        roomId: roomIdRef.current,
+        code,
+        sessionId,
+        timestamp: Date.now()
+      });
+    }
+  }, [isConnected]);
 
   const emitOutputChange = useCallback((output) => {
-    return createEmitFunction('output-change')({ output })
-  }, [createEmitFunction]);
+    if (socketRef.current && isConnected && roomIdRef.current) {
+      const sessionId = sessionStorage.getItem('sessionId');
+      socketRef.current.emit('output-change', {
+        roomId: roomIdRef.current,
+        output,
+        sessionId,
+        timestamp: Date.now()
+      });
+    }
+  }, [isConnected]);
 
   const emitLanguageChange = useCallback((language) => {
-    return createEmitFunction('language-change')({ language })
-  }, [createEmitFunction]);
+    if (socketRef.current && isConnected && roomIdRef.current) {
+      const sessionId = sessionStorage.getItem('sessionId');
+      socketRef.current.emit('language-change', {
+        roomId: roomIdRef.current,
+        language,
+        sessionId,
+        timestamp: Date.now()
+      });
+    }
+  }, [isConnected]);
 
   const emitInputChange = useCallback((input) => {
-    return createEmitFunction('input-change')({ input })
-  }, [createEmitFunction]);
-
-  const emitSubmissionStatus = useCallback((status, studentId) => {
-    return createEmitFunction('submission-status')({ status, studentId })
-  }, [createEmitFunction]);
-
-  const emitHtmlChange = useCallback((code) => {
-    return createEmitFunction('html-change')({ code })
-  }, [createEmitFunction]);
-
-  const emitCssChange = useCallback((code) => {
-    return createEmitFunction('css-change')({ code })
-  }, [createEmitFunction]);
-
-  const emitJsChange = useCallback((code) => {
-    return createEmitFunction('js-change')({ code })
-  }, [createEmitFunction]);
-
-  // Manual reconnection function
-  const reconnect = useCallback(() => {
-    if (socket) {
-      socket.disconnect()
-      setTimeout(() => {
-        socket.connect()
-      }, 1000)
+    if (socketRef.current && isConnected && roomIdRef.current) {
+      const sessionId = sessionStorage.getItem('sessionId');
+      socketRef.current.emit('input-change', {
+        roomId: roomIdRef.current,
+        input,
+        sessionId,
+        timestamp: Date.now()
+      });
     }
-  }, []);
+  }, [isConnected]);
+
+  // Dashboard data functions
+  const emitDashboardDataRequest = useCallback(() => {
+    if (socketRef.current && isConnected && roomIdRef.current) {
+      socketRef.current.emit('request-dashboard-data', {
+        roomId: roomIdRef.current
+      });
+    }
+  }, [isConnected]);
+
+  const emitStudentProgressUpdate = useCallback((progressData) => {
+    if (socketRef.current && isConnected && roomIdRef.current) {
+      const sessionId = sessionStorage.getItem('sessionId');
+      socketRef.current.emit('student-progress-update', {
+        roomId: roomIdRef.current,
+        sessionId,
+        ...progressData,
+        timestamp: Date.now()
+      });
+    }
+  }, [isConnected]);
+
+  // Request sync when connection is established
+  const requestSync = useCallback(() => {
+    if (socketRef.current && isConnected && roomIdRef.current) {
+      socketRef.current.emit('request-sync', {
+        roomId: roomIdRef.current
+      });
+    }
+  }, [isConnected]);
+
+  // Auto-request sync when connected
+  useEffect(() => {
+    if (isConnected && roomId) {
+      // Small delay to ensure room join is processed
+      setTimeout(() => {
+        requestSync();
+      }, 500);
+    }
+  }, [isConnected, roomId, requestSync]);
 
   return {
-    socket,
+    socket: socketRef.current,
     isConnected,
     activeStudents,
     connectionAttempts,
-    lastActivity: new Date(lastActivity).toLocaleTimeString(),
     reconnect,
+    requestSync,
+    
+    // Real-time broadcasting functions
     emitCodeChange,
     emitOutputChange,
     emitLanguageChange,
     emitInputChange,
-    emitSubmissionStatus,
-    emitHtmlChange,
-    emitCssChange,
-    emitJsChange,
-  }
+    
+    // Dashboard functions
+    emitDashboardDataRequest,
+    emitStudentProgressUpdate
+  };
 };
 
 export default useSocket;

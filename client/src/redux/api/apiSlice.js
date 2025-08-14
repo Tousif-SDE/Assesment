@@ -1,9 +1,12 @@
 import { createApi, fetchBaseQuery } from '@reduxjs/toolkit/query/react';
 import { handleApiError } from '../../utils/apiErrorHandler';
 
+// Ensure base URL always points to backend
+const API_BASE_URL = import.meta.env.VITE_API_URL?.trim() || 'http://localhost:5000';
+
 // Create a base query with auth header
 const baseQuery = fetchBaseQuery({
-  baseUrl: `${import.meta.env.VITE_API_URL || ''}/api`,
+  baseUrl: `${API_BASE_URL}/api`,
   prepareHeaders: (headers, { getState }) => {
     // Get the token from the auth state
     const token = getState().auth.token;
@@ -61,11 +64,13 @@ const baseQueryWithRetry = async (args, api, extraOptions) => {
   }
   
   return result;
-}
+};
 
 export const apiSlice = createApi({
   reducerPath: 'api',
   baseQuery: baseQueryWithRetry,
   tagTypes: ['Room', 'TestCase', 'Submission', 'TeacherDashboard'],
   endpoints: (builder) => ({}),
-})
+});
+
+console.log('✅ API Base URL:', `${API_BASE_URL}/api`);

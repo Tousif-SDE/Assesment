@@ -1,103 +1,175 @@
 // Server/controllers/testCaseController.js
-import prisma from '../prisma/prismaClient.js';
+import { PrismaClient } from '@prisma/client';
+import { v4 as uuidv4 } from 'uuid';
+import redis from '../redis/redisClient.js';
+
+const prisma = new PrismaClient();
+const isRedisConnected = () => redis.status === "ready";
+
+const logHit = (msg) => console.log(`📦 [REDIS HIT] ${msg}`);
+const logMiss = (msg) => console.log(`💾 [REDIS MISS] ${msg}`);
+
+/**
+ * Create a new test case
+ */
 
 export const createTestCase = async (req, res) => {
   try {
-    const { roomId, input, expectedOutput, title } = req.body;
-    const userId = req.user.id; // can be teacher or student
+    const { roomId, input, expectedOutput, title, description } = req.body;
+    if (!roomId || !input) return res.status(400).json({ message: 'Room ID and input are required' });
 
-    // Check if the room exists
-    const room = await prisma.room.findUnique({
-      where: { id: roomId },
+    // Verify that the room exists before creating a test case
+    const roomExists = await prisma.room.findUnique({
+      where: { id: roomId }
     });
 
-    if (!room) {
-      return res.status(404).json({ error: 'Room not found' });
+    if (!roomExists) {
+      return res.status(404).json({ message: 'Room not found. Cannot create test case for non-existent room.' });
     }
 
-    // Generate a UUID for the test case ID
-    const { v4: uuidv4 } = await import('uuid');
-    const testCaseId = uuidv4();
+    // Build data object conditionally to avoid referencing columns that might not yet exist
+    const data = {
+      id: uuidv4(),
+      roomId,
+      input,
+      expectedOutput: expectedOutput || '',
+      createdBy: req.user.id,
+      title: title || 'Untitled Test Case',
+    };
+    if (typeof description !== 'undefined' && description !== '') {
+      data.description = description; // will be ignored if column exists not yet migrated when omitted
+    }
 
-    // Create the test case
-    const testCase = await prisma.testcase.create({
-      data: {
-        id: testCaseId,
-        roomId,
-        input,
-        expectedOutput,
-        title: title || 'Untitled Test Case', // Use provided title or default
-        createdBy: userId,
-      },
-    });
+    const testCase = await prisma.testcase.create({ data });
+
+    if (isRedisConnected()) {
+      const testCaseKey = `testcase:${roomId}:${testCase.id}`;
+      const roomKey = `testcases:${roomId}`;
+      await redis.set(testCaseKey, JSON.stringify(testCase));
+      const cachedList = JSON.parse(await redis.get(roomKey) || '[]');
+      cachedList.push(testCase);
+      await redis.set(roomKey, JSON.stringify(cachedList));
+      console.log(`✅ Stored test case ${testCase.id} in Redis for room ${roomId}`);
+    } else {
+      console.warn('⚠ Redis not connected — skipping cache write.');
+    }
+
+    // Sync with SocketManager's in-memory room + Redis, and emit to students
+    try {
+      const socketManager = req.app.get('socketManager');
+      if (socketManager) {
+        let roomData = socketManager.rooms.get(roomId) || {
+          id: roomId,
+          students: [],
+          teachers: [],
+          testCases: [],
+          submissions: [],
+          createdAt: new Date(),
+          lastActivity: new Date(),
+          currentState: { code: '', input: '', output: '', language: 'javascript' },
+          stats: { totalSubmissions: 0, solvedTestCases: 0, activeStudentsCount: 0 }
+        };
+        roomData.testCases = [...(roomData.testCases || []), testCase];
+        roomData.lastActivity = new Date();
+        socketManager.rooms.set(roomId, roomData);
+        await socketManager.persistRoomData(roomId, roomData);
+
+        if (socketManager.io) {
+          socketManager.io.to(roomId).emit('test-case-created', {
+            testCase,
+            totalTestCases: roomData.testCases.length,
+            timestamp: Date.now()
+          });
+        }
+      }
+    } catch (e) {
+      console.warn('Socket/Redis sync failed for test-case-created:', e.message);
+    }
 
     res.status(201).json(testCase);
-  } catch (err) {
-    console.error('Error creating test case:', err);
-    res.status(500).json({ error: 'Failed to create test case', details: err.message });
+  } catch (error) {
+    console.error('Error creating test case:', error);
+    res.status(500).json({ message: 'Failed to create test case', error: error.message || error });
   }
 };
 
+/**
+ * Get all test cases for a room
+ */
 export const getTestCasesByRoom = async (req, res) => {
   try {
     const { roomId } = req.params;
-    const userId = req.user.id;
-    const userRole = req.user.role;
+    if (!roomId) return res.status(400).json({ message: 'Room ID is required' });
 
-    // Check if the room exists
-    const room = await prisma.room.findUnique({
-      where: { id: roomId },
-    });
-
-    if (!room) {
-      return res.status(404).json({ error: 'Room not found' });
+    if (isRedisConnected()) {
+      const cached = await redis.get(`testcases:${roomId}`);
+      if (cached) {
+        logHit(`Room ${roomId} — served ${JSON.parse(cached).length} cases from Redis`);
+        return res.json(JSON.parse(cached));
+      }
+      logMiss(`Room ${roomId} — not found in Redis`);
+    } else {
+      console.warn('⚠ Redis not connected — fetching from DB only.');
     }
 
-    // For teachers, return all test case details
-    // For students, hide the expected output
-    const testCases = await prisma.testcase.findMany({
-      where: { roomId },
-      select: {
-        id: true,
-        input: true,
-        expectedOutput: userRole === 'TEACHER', // Only include expectedOutput for teachers
-        createdAt: true,
-        createdBy: true,
-        title: true, // Include title field
-      },
-    });
+    const testCases = await prisma.testcase.findMany({ where: { roomId } });
 
-    // For students, check which test cases they've solved
-    if (userRole === 'STUDENT') {
-      // Get all submissions by this student for test cases in this room
-      const submissions = await prisma.submission.findMany({
-        where: {
-          studentId: userId,
-          testcase: {
-            roomId,
-          },
-          status: 'Solved',
-        },
-        select: {
-          testCaseId: true,
-        },
-      });
-
-      // Create a set of solved test case IDs
-      const solvedTestCaseIds = new Set(submissions.map(s => s.testCaseId));
-
-      // Add a 'solved' flag to each test case
-      const testCasesWithSolvedStatus = testCases.map(tc => ({
-        ...tc,
-        solved: solvedTestCaseIds.has(tc.id),
-      }));
-
-      return res.json(testCasesWithSolvedStatus);
+    if (isRedisConnected()) {
+      await redis.set(`testcases:${roomId}`, JSON.stringify(testCases));
+      console.log(`✅ Stored ${testCases.length} test cases in Redis for room ${roomId}`);
     }
 
     res.json(testCases);
-  } catch (err) {
-    console.error('Error fetching test cases:', err);
-    res.status(500).json({ error: 'Failed to fetch test cases', details: err.message });
+  } catch (error) {
+    console.error('Error getting test cases:', error);
+    res.status(500).json({ message: 'Failed to get test cases', error: error.message });
+  }
+};
+
+/**
+ * Publish a test case
+ */
+export const publishTestCase = async (req, res) => {
+  try {
+    const { testCaseId } = req.params;
+    const { expectedOutput, description, title } = req.body;
+    if (!testCaseId) return res.status(400).json({ message: 'Test case ID is required' });
+
+    const testCase = await prisma.testcase.update({
+      where: { id: testCaseId },
+      data: { 
+        expectedOutput: expectedOutput ?? '',
+        description: description ?? undefined,
+        title: title ?? undefined
+      }
+    });
+
+    const room = await prisma.room.findUnique({ where: { id: testCase.roomId } });
+    if (!room) return res.status(404).json({ message: 'Room not found' });
+
+    if (isRedisConnected()) {
+      const testCaseKey = `testcase:${testCase.roomId}:${testCase.id}`;
+      const roomKey = `testcases:${testCase.roomId}`;
+
+      await redis.set(testCaseKey, JSON.stringify(testCase));
+      const cachedList = JSON.parse(await redis.get(roomKey) || '[]');
+      const idx = cachedList.findIndex(tc => tc.id === testCase.id);
+      if (idx !== -1) cachedList[idx] = testCase; else cachedList.push(testCase);
+      await redis.set(roomKey, JSON.stringify(cachedList));
+
+      console.log(`✅ Updated test case ${testCase.id} in Redis for room ${testCase.roomId}`);
+    } else {
+      console.warn('⚠ Redis not connected — skipping cache update.');
+    }
+
+    req.app.get('socketManager').io.to(testCase.roomId).emit('test-case-published', {
+      testCase,
+      timestamp: Date.now()
+    });
+
+    res.json({ message: 'Test case published successfully', testCase });
+  } catch (error) {
+    console.error('Error publishing test case:', error);
+    res.status(500).json({ message: 'Failed to publish test case', error: error.message });
   }
 };

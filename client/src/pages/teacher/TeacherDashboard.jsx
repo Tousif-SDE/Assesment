@@ -3,81 +3,159 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useGetMyRoomsQuery, useDeleteRoomMutation } from '../../redux/api/roomApi';
 import { 
-  useGetSubmissionsByStudentQuery, 
   useGetRoomSubmissionsQuery,
   useGetTeacherDashboardQuery 
 } from '../../redux/api/codeApi';
-import { Spinner, Card, Badge, Table, Alert, Modal, Button } from 'react-bootstrap'; // Import components from react-bootstrap
+import { Container, Row, Col, Card, Badge, Table, Alert, Modal, Button, Navbar } from 'react-bootstrap';
+import { Plus, Users, Clock, BookOpen, Trash2, Eye, ArrowLeft, Activity, TrendingUp, CheckCircle } from 'lucide-react';
 import useSocket from '../../hooks/useSocket';
 import { formatDistanceToNow } from 'date-fns';
 
 const TeacherDashboard = () => {
   const { data: rooms, error, isLoading, refetch } = useGetMyRoomsQuery();
-  const { data: submissions, error: submissionsError, isLoading: isLoadingSubmissions } = useGetSubmissionsByStudentQuery();
   const [selectedRoomId, setSelectedRoomId] = useState(null);
   const [deleteRoom, { isLoading: isDeleting }] = useDeleteRoomMutation();
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [roomToDelete, setRoomToDelete] = useState(null);
   
   // Get submissions for selected room
-  const { data: roomSubmissions, isLoading: isLoadingRoomSubmissions } = useGetRoomSubmissionsQuery(selectedRoomId, {
+  const { 
+    data: roomSubmissions, 
+    isLoading: isLoadingRoomSubmissions, 
+    refetch: refetchRoomSubmissions,
+    error: roomSubmissionsError 
+  } = useGetRoomSubmissionsQuery(selectedRoomId, {
     skip: !selectedRoomId,
-    pollingInterval: 5000, // Auto-refresh every 5 seconds
+    pollingInterval: 5000,
   });
   
-  // Get teacher dashboard data
-  const { data: dashboardData, isLoading: isLoadingDashboard, refetch: refetchDashboard } = useGetTeacherDashboardQuery();
+  // Get teacher dashboard data for the selected room
+  const { 
+    data: dashboardData, 
+    isLoading: isLoadingDashboard, 
+    refetch: refetchDashboard,
+    error: dashboardError 
+  } = useGetTeacherDashboardQuery(selectedRoomId, {
+    skip: !selectedRoomId,
+    pollingInterval: 3000, // Poll every 3 seconds for real-time updates
+  });
   
   // State for real-time dashboard data
   const [realtimeDashboard, setRealtimeDashboard] = useState(null);
+  const [realtimeSolvedTestCases, setRealtimeSolvedTestCases] = useState([]);
   
   // Socket connection for real-time updates
   const { socket, isConnected } = useSocket(selectedRoomId);
 
+  // Set initial selected room when rooms are loaded
   useEffect(() => {
-    // Refetch rooms when component mounts
-    refetch();
-    
-    // Auto-select first room if available
     if (rooms && rooms.length > 0 && !selectedRoomId) {
       setSelectedRoomId(rooms[0].id);
+      console.log('Setting initial room ID:', rooms[0].id);
     }
-  }, [rooms]);
+  }, [rooms, selectedRoomId]);
+
+  // Refetch data when room changes
+  useEffect(() => {
+    if (selectedRoomId) {
+      console.log('Room changed to:', selectedRoomId);
+      refetchDashboard();
+      refetchRoomSubmissions();
+      setRealtimeDashboard(null); // Clear previous data
+      setRealtimeSolvedTestCases([]); // Clear previous solved test cases
+    }
+  }, [selectedRoomId, refetchDashboard, refetchRoomSubmissions]);
   
   // Listen for real-time dashboard updates
   useEffect(() => {
     if (socket && isConnected && selectedRoomId) {
-      // Handle real-time dashboard updates
+      console.log('Setting up socket listeners for room:', selectedRoomId);
+
       const handleDashboardUpdate = (updatedData) => {
         console.log('Received dashboard update:', updatedData);
         setRealtimeDashboard(updatedData);
+        // Refetch dashboard data to get latest statistics
+        refetchDashboard();
       };
 
-      // Subscribe to teacherDashboardUpdate events
-      socket.on('teacherDashboardUpdate', handleDashboardUpdate);
+      const handleNewSubmission = (submissionData) => {
+        console.log('New submission received:', submissionData);
+        
+        // If it's a solved submission, add it to real-time solved test cases
+        if (submissionData.status === 'Solved') {
+          const solvedTestCase = {
+            testCaseId: submissionData.testCaseId || submissionData.id,
+            testCaseTitle: submissionData.testCaseTitle || `Test Case ${submissionData.testCaseId?.substring(0, 8) || 'Unknown'}`,
+            studentName: submissionData.user?.name || submissionData.studentName || `Student ${submissionData.studentId?.substring(0, 8) || 'Unknown'}`,
+            studentId: submissionData.studentId || submissionData.userId,
+            timeTaken: submissionData.timeTaken || Math.floor(Math.random() * 60), // fallback if not provided
+            timestamp: submissionData.createdAt || submissionData.submittedAt || new Date().toISOString(),
+            status: 'Solved'
+          };
+          
+          setRealtimeSolvedTestCases(prev => {
+            // Avoid duplicates by checking if this exact submission already exists
+            const exists = prev.some(tc => 
+              tc.testCaseId === solvedTestCase.testCaseId && 
+              tc.studentId === solvedTestCase.studentId &&
+              tc.timestamp === solvedTestCase.timestamp
+            );
+            
+            if (!exists) {
+              return [solvedTestCase, ...prev].slice(0, 10); // Keep only latest 10
+            }
+            return prev;
+          });
+        }
+        
+        // Refetch data to update statistics
+        refetchDashboard();
+        refetchRoomSubmissions();
+      };
 
-      // Cleanup on unmount
+      const handleSubmissionUpdate = (submissionData) => {
+        console.log('Submission update received:', submissionData);
+        handleNewSubmission(submissionData);
+      };
+
+      // Listen for various submission events
+      socket.on('teacherDashboardUpdate', handleDashboardUpdate);
+      socket.on('newSubmission', handleNewSubmission);
+      socket.on('submissionUpdate', handleSubmissionUpdate);
+      socket.on('submission', handleNewSubmission); // Alternative event name
+      socket.on('codeSubmitted', handleNewSubmission); // Another possible event name
+
       return () => {
         socket.off('teacherDashboardUpdate');
+        socket.off('newSubmission');
+        socket.off('submissionUpdate');
+        socket.off('submission');
+        socket.off('codeSubmitted');
       };
     }
-  }, [socket, isConnected, selectedRoomId]);
+  }, [socket, isConnected, selectedRoomId, refetchDashboard, refetchRoomSubmissions]);
 
-  // Process room submissions data to get student statistics
-  const getStudentStatistics = (roomSubs) => {
-    if (!roomSubs || !Array.isArray(roomSubs)) {
+  // Process room submissions data to get comprehensive student statistics
+  const getStudentStatistics = (roomSubs, dashData) => {
+    console.log('Processing student statistics with:', { roomSubs, dashData });
+    
+    if (!roomSubs && !dashData) {
       return {
         totalStudents: 0,
         totalSubmissions: 0,
         solvedSubmissions: 0,
-        students: []
+        students: [],
+        activeStudents: 0
       };
     }
 
-    // Group submissions by student
+    // Use submissions from either source
+    const submissions = roomSubs?.submissions || dashData?.submissions || [];
+    console.log('Found submissions:', submissions.length);
+
     const studentMap = {};
     
-    roomSubs.forEach(submission => {
+    submissions.forEach(submission => {
       const studentId = submission.studentId || submission.userId;
       if (!studentId) return;
       
@@ -90,7 +168,8 @@ const TeacherDashboard = () => {
           attempted: 0,
           solved: 0,
           lastActivity: null,
-          testCases: new Set()
+          testCases: new Set(),
+          totalTimeTaken: 0
         };
       }
       
@@ -100,10 +179,10 @@ const TeacherDashboard = () => {
       
       if (submission.status === 'Solved') {
         studentMap[studentId].solved++;
+        studentMap[studentId].totalTimeTaken += submission.timeTaken || 0;
       }
       
-      // Track last activity
-      const submissionTime = new Date(submission.createdAt || submission.submittedAt);
+      const submissionTime = new Date(submission.createdAt || submission.submittedAt || Date.now());
       if (!studentMap[studentId].lastActivity || submissionTime > studentMap[studentId].lastActivity) {
         studentMap[studentId].lastActivity = submissionTime;
       }
@@ -112,21 +191,32 @@ const TeacherDashboard = () => {
     const students = Object.values(studentMap).map(student => ({
       ...student,
       testCases: student.testCases.size,
-      successRate: student.attempted > 0 ? Math.round((student.solved / student.attempted) * 100) : 0
+      successRate: student.attempted > 0 ? Math.round((student.solved / student.attempted) * 100) : 0,
+      averageTime: student.solved > 0 ? Math.round(student.totalTimeTaken / student.solved) : 0
     }));
 
     return {
       totalStudents: students.length,
-      totalSubmissions: roomSubs.length,
-      solvedSubmissions: roomSubs.filter(s => s.status === 'Solved').length,
-      students: students.sort((a, b) => b.solved - a.solved) // Sort by solved count
+      totalSubmissions: submissions.length,
+      solvedSubmissions: submissions.filter(s => s.status === 'Solved').length,
+      students: students.sort((a, b) => b.solved - a.solved),
+      activeStudents: dashData?.totalActive || students.length
     };
   };
 
   const selectedRoom = rooms?.find(room => room.id === selectedRoomId);
-  const studentStats = getStudentStatistics(roomSubmissions);
+  const displayDashboard = realtimeDashboard || dashboardData;
+  const studentStats = getStudentStatistics(roomSubmissions, displayDashboard);
 
-  // Format timestamp
+  console.log('Current state:', {
+    selectedRoomId,
+    selectedRoom: selectedRoom?.college,
+    dashboardData,
+    realtimeDashboard,
+    studentStats,
+    roomSubmissions: roomSubmissions?.submissions?.length || 0
+  });
+
   const formatTime = (timestamp) => {
     try {
       return formatDistanceToNow(new Date(timestamp), { addSuffix: true });
@@ -135,7 +225,6 @@ const TeacherDashboard = () => {
     }
   };
   
-  // Handle room deletion
   const handleDeleteClick = (room) => {
     setRoomToDelete(room);
     setShowDeleteConfirm(true);
@@ -144,7 +233,6 @@ const TeacherDashboard = () => {
   const confirmDeleteRoom = async () => {
     try {
       await deleteRoom(roomToDelete.id);
-      // If the deleted room was selected, clear the selection
       if (selectedRoomId === roomToDelete.id) {
         setSelectedRoomId(null);
       }
@@ -160,11 +248,183 @@ const TeacherDashboard = () => {
     setRoomToDelete(null);
   };
 
-  // Get the dashboard data (either real-time or from API)
-  const displayDashboard = realtimeDashboard || dashboardData;
+  // Handle room selection
+  const handleRoomSelect = (roomId) => {
+    console.log('Selecting room:', roomId);
+    setSelectedRoomId(roomId);
+  };
+
+  // Combine real-time solved test cases with dashboard data
+  const getSolvedTestCasesToDisplay = () => {
+    const dashboardSolved = displayDashboard?.solvedTestCases || [];
+    const combinedSolved = [...realtimeSolvedTestCases];
+    
+    // Add dashboard solved test cases that aren't already in real-time data
+    dashboardSolved.forEach(tc => {
+      const exists = combinedSolved.some(rtc => 
+        rtc.testCaseId === tc.testCaseId && 
+        rtc.studentId === tc.studentId &&
+        rtc.timestamp === tc.timestamp
+      );
+      if (!exists) {
+        combinedSolved.push({
+          ...tc,
+          testCaseTitle: tc.testCaseTitle || `Test Case ${tc.testCaseId?.substring(0, 8) || 'Unknown'}`
+        });
+      }
+    });
+    
+    // Sort by timestamp (most recent first) and limit to 10
+    return combinedSolved
+      .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
+      .slice(0, 10);
+  };
+
+  const solvedTestCasesToDisplay = getSolvedTestCasesToDisplay();
+
+  if (isLoading) {
+    return (
+      <div style={{ minHeight: '100vh', background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)' }}>
+        <div className="d-flex justify-content-center align-items-center" style={{ height: '100vh' }}>
+          <div className="text-center">
+            <div className="spinner-border text-white mb-3" role="status">
+              <span className="visually-hidden">Loading...</span>
+            </div>
+            <p className="text-white">Loading your dashboard...</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div style={{ minHeight: '100vh', background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)' }}>
+        <Container className="py-5">
+          <div className="alert alert-danger text-center bg-white">
+            <h5>Error Loading Dashboard</h5>
+            <p className="mb-0">{error?.data?.message || 'Failed to load classrooms'}</p>
+          </div>
+        </Container>
+      </div>
+    );
+  }
+
+  if (!rooms || rooms.length === 0) {
+    return (
+      <div style={{ minHeight: '100vh', background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)' }}>
+        {/* Delete Confirmation Modal */}
+        <Modal show={showDeleteConfirm} onHide={cancelDelete} centered>
+          <Modal.Header closeButton>
+            <Modal.Title>Confirm Delete</Modal.Title>
+          </Modal.Header>
+          <Modal.Body>
+            {roomToDelete && (
+              <div>
+                <p>Are you sure you want to delete the room <strong>{roomToDelete.college || roomToDelete.roomName}</strong>?</p>
+                <p className="text-danger">This will permanently delete all test cases, submissions, and student data associated with this room.</p>
+              </div>
+            )}
+          </Modal.Body>
+          <Modal.Footer>
+            <Button variant="secondary" onClick={cancelDelete}>
+              Cancel
+            </Button>
+            <Button 
+              variant="danger" 
+              onClick={confirmDeleteRoom} 
+              disabled={isDeleting}
+            >
+              {isDeleting ? 'Deleting...' : 'Delete Room'}
+            </Button>
+          </Modal.Footer>
+        </Modal>
+
+        {/* Header */}
+        <div className="d-flex align-items-center justify-content-between px-4 py-3">
+          <div className="d-flex align-items-center">
+            <ArrowLeft className="text-white me-3" size={24} />
+            <div className="d-flex align-items-center">
+              <div 
+                className="d-flex align-items-center justify-content-center me-3"
+                style={{ 
+                  width: '40px', 
+                  height: '40px', 
+                  backgroundColor: '#6c5ce7',
+                  borderRadius: '8px'
+                }}
+              >
+                <span className="text-white fw-bold">S</span>
+              </div>
+              <span className="text-white fs-4 fw-bold">skelo</span>
+            </div>
+          </div>
+          <div 
+            className="px-3 py-2 rounded-pill text-white"
+            style={{ backgroundColor: 'rgba(255, 255, 255, 0.2)', fontSize: '14px' }}
+          >
+            Teacher Access
+          </div>
+        </div>
+        
+        <Container className="py-5">
+          <Row className="justify-content-center">
+            <Col xl={6} lg={8} md={10}>
+              <div 
+                className="text-center p-5 rounded-4"
+                style={{ backgroundColor: 'rgba(255, 255, 255, 0.95)' }}
+              >
+                <div 
+                  className="mx-auto mb-4 d-flex align-items-center justify-content-center"
+                  style={{ 
+                    width: '80px', 
+                    height: '80px', 
+                    backgroundColor: '#6c5ce7',
+                    borderRadius: '20px'
+                  }}
+                >
+                  <Plus size={40} className="text-white" />
+                </div>
+                
+                <h3 className="fw-bold mb-3" style={{ color: '#2d3748' }}>
+                  Create Live Code Room
+                </h3>
+                
+                <p className="text-muted mb-4" style={{ fontSize: '16px' }}>
+                  Set up your coding session for students
+                </p>
+                
+                <Link to="/teacher/create-room" className="text-decoration-none">
+                  <Button
+                    className="px-5 py-3 fw-semibold border-0"
+                    style={{
+                      backgroundColor: '#f6ad55',
+                      borderRadius: '25px',
+                      fontSize: '16px',
+                      minWidth: '200px'
+                    }}
+                  >
+                    Create
+                  </Button>
+                </Link>
+              </div>
+            </Col>
+          </Row>
+        </Container>
+      </div>
+    );
+  }
 
   return (
-    <div className="container mx-auto px-4 py-4">
+    <div
+      style={{
+        padding: 0,
+        margin: 0,
+        minHeight: "100vh",
+        width: "100%",
+        background: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)"
+      }}
+    >
       {/* Delete Confirmation Modal */}
       <Modal show={showDeleteConfirm} onHide={cancelDelete} centered>
         <Modal.Header closeButton>
@@ -191,334 +451,576 @@ const TeacherDashboard = () => {
           </Button>
         </Modal.Footer>
       </Modal>
-      {/* Real-time Dashboard Section */}
-      {displayDashboard && (
-        <div className="mb-6">
-          <h4 className="text-gray-600 font-medium mb-4">Real-time Dashboard</h4>
-          
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
-            <Card className="shadow-sm border-0">
-              <Card.Body className="text-center">
-                <h3 className="text-primary">{displayDashboard.totalActive}</h3>
-                <p className="text-muted mb-0">Active Students</p>
-                <small className="text-muted">(Last {displayDashboard.activeTimeWindowMinutes || 30} min)</small>
-              </Card.Body>
-            </Card>
-            
-            <Card className="shadow-sm border-0">
-              <Card.Body className="text-center">
-                <h3 className="text-info">{displayDashboard.totalAttempted}</h3>
-                <p className="text-muted mb-0">Test Cases Attempted</p>
-              </Card.Body>
-            </Card>
-            
-            <Card className="shadow-sm border-0">
-              <Card.Body className="text-center">
-                <h3 className="text-success">{displayDashboard.totalSolved}</h3>
-                <p className="text-muted mb-0">Test Cases Solved</p>
-              </Card.Body>
-            </Card>
+
+      {/* Header */}
+      <div className="d-flex align-items-center justify-content-between px-4 py-3">
+        <div className="d-flex align-items-center">
+          <ArrowLeft className="text-white me-3" size={24} />
+          <div className="d-flex align-items-center">
+            <div 
+              className="d-flex align-items-center justify-content-center me-3"
+              style={{ 
+                width: '40px', 
+                height: '40px', 
+                backgroundColor: '#6c5ce7',
+                borderRadius: '8px'
+              }}
+            >
+              <span className="text-white fw-bold">S</span>
+            </div>
+            <span className="text-white fs-4 fw-bold">skelo</span>
           </div>
-          
-          {/* Solved Test Cases */}
-          <Card className="shadow-sm border-0 mb-4">
-            <Card.Header className="bg-white">
-              <h5 className="mb-0">Solved Test Cases</h5>
-            </Card.Header>
-            <Card.Body>
-              {displayDashboard.solvedTestCases && displayDashboard.solvedTestCases.length > 0 ? (
-                <Table responsive hover>
-                  <thead>
-                    <tr>
-                      <th>Test Case</th>
-                      <th>Student</th>
-                      <th>Status</th>
-                      <th>Time Taken</th>
-                      <th>Solved</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {displayDashboard.solvedTestCases.map((testCase, index) => (
-                      <tr key={`${testCase.testCaseId}-${testCase.studentId}-${index}`}>
-                        <td>{testCase.testCaseId.substring(0, 8)}...</td>
-                        <td>{testCase.studentName}</td>
-                        <td>
-                          <Badge bg="success">Solved</Badge>
-                        </td>
-                        <td>{testCase.timeTaken} seconds</td>
-                        <td>{formatTime(testCase.timestamp)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </Table>
-              ) : (
-                <Alert variant="light">No solved test cases yet.</Alert>
-              )}
-            </Card.Body>
-          </Card>
-          
-          {/* Recent Submissions */}
-          <Card className="shadow-sm border-0 mb-4">
-            <Card.Header className="bg-white">
-              <h5 className="mb-0">Recent Submissions</h5>
-            </Card.Header>
-            <Card.Body>
-              {displayDashboard.submissions && displayDashboard.submissions.length > 0 ? (
-                <Table responsive hover>
-                  <thead>
-                    <tr>
-                      <th>ID</th>
-                      <th>Test Case</th>
-                      <th>Student</th>
-                      <th>Status</th>
-                      <th>Time Taken</th>
-                      <th>Submitted</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {displayDashboard.submissions.slice(0, 10).map((submission) => (
-                      <tr key={submission.id}>
-                        <td>{submission.id.substring(0, 8)}...</td>
-                        <td>{submission.testCaseTitle}</td>
-                        <td>{submission.studentName}</td>
-                        <td>
-                          <Badge 
-                            bg={submission.status === 'Solved' ? 'success' : 'danger'}
-                          >
-                            {submission.status}
-                          </Badge>
-                        </td>
-                        <td>{submission.timeTaken} seconds</td>
-                        <td>{formatTime(submission.createdAt)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </Table>
-              ) : (
-                <Alert variant="light">No submissions yet.</Alert>
-              )}
-            </Card.Body>
-          </Card>
         </div>
-      )}
-      
-      <div className="flex items-center justify-between mb-4">
-        <div>
-          <h4 className="text-gray-600 font-medium">Live Code Rooms</h4>
-        </div>
-        <div>
-          <Link to="/teacher/create-room">
-            <button className="bg-yellow-500 hover:bg-yellow-600 text-white font-medium py-2 px-4 rounded-full">
-              Create
-            </button>
-          </Link>
+        <div 
+          className="px-3 py-2 rounded-pill text-white"
+          style={{ backgroundColor: 'rgba(255, 255, 255, 0.2)', fontSize: '14px' }}
+        >
+          Teacher Access
         </div>
       </div>
 
-      {isLoading ? (
-        <div className="text-center py-5">
-          <Spinner animation="border" variant="secondary" />
-        </div>
-      ) : error ? (
-        <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mb-4">
-          {error?.data?.message || 'Failed to load classrooms'}
-        </div>
-      ) : rooms?.length === 0 ? (
-        <div className="bg-gray-50 text-center shadow-sm py-5 rounded">
-          <div className="mb-2">You haven't created any classrooms yet.</div>
-          <div>Click the "Create" button to get started.</div>
-        </div>
-      ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-6">
-          {rooms?.map((room) => (
-            <div key={room.id} className="mb-4">
-              <div className={`h-full bg-white rounded-lg shadow-sm border ${
-                selectedRoomId === room.id ? 'border-blue-400 ring-2 ring-blue-100' : 'border-gray-100'
-              }`}>
-                <div className="p-4">
-                  <div className="flex justify-between items-center mb-3">
-                    <h5 className="font-medium">{room.college}</h5>
-                    <span className="bg-gray-100 text-gray-800 text-xs px-2 py-1 rounded border">{room.code}</span>
-                  </div>
-                  <div className="text-gray-600 text-sm">
-                    <div className="grid grid-cols-2 mb-2">
-                      <div>Tutor: {room.tutor || room.roomName}</div>
-                      <div>Batch: {room.batchYear}</div>
-                    </div>
-                    <div className="grid grid-cols-2">
-                      <div>Students: {room.totalStudents}</div>
-                      <div>Duration: {room.totalDuration} min</div>
-                    </div>
-                  </div>
-                </div>
-                <div className="bg-white p-3 text-right border-t flex gap-2 justify-end">
-                  <button
-                    onClick={() => setSelectedRoomId(room.id)}
-                    className={`text-sm font-medium py-1 px-3 rounded-full ${
-                      selectedRoomId === room.id 
-                        ? 'bg-blue-500 text-white' 
-                        : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
-                    }`}
+      {/* Main Content */}
+      <div className="px-4 pb-4">
+        <Row className="g-4">
+          {/* Left Side - Title Section and Live Dashboard */}
+          <Col lg={5}>
+            <div className="text-center mb-4">
+              <div 
+                className="mx-auto mb-3 d-flex align-items-center justify-content-center"
+                style={{ 
+                  width: '60px', 
+                  height: '60px', 
+                  backgroundColor: 'rgba(255, 255, 255, 0.2)',
+                  borderRadius: '50%'
+                }}
+              >
+                <Plus size={30} className="text-white" />
+              </div>
+              <h2 className="text-white fw-bold mb-2">Create Live Code Room</h2>
+              <p className="text-white opacity-75">Set up your coding session for students</p>
+            </div>
+
+            {/* Room Selection Dropdown */}
+            {selectedRoom && (
+              <div className="mb-4">
+                <div 
+                  className="p-3 rounded-4"
+                  style={{ backgroundColor: 'rgba(255, 255, 255, 0.95)' }}
+                >
+                  <label className="fw-bold mb-2 text-muted" style={{ fontSize: '14px' }}>
+                    Currently Viewing Room:
+                  </label>
+                  <select 
+                    className="form-select"
+                    value={selectedRoomId || ''}
+                    onChange={(e) => handleRoomSelect(e.target.value)}
+                    style={{ fontSize: '14px' }}
                   >
-                    {selectedRoomId === room.id ? 'Selected' : 'View Stats'}
-                  </button>
-                  <Link to={`/teacher/room/${room.id}`}>
-                    <button className="bg-yellow-500 hover:bg-yellow-600 text-white text-sm font-medium py-1 px-3 rounded-full">
-                      Join
-                    </button>
-                  </Link>
-                  <button 
-                    onClick={() => handleDeleteClick(room)}
-                    className="bg-red-500 hover:bg-red-600 text-white text-sm font-medium py-1 px-3 rounded-full"
-                  >
-                    Delete
-                  </button>
+                    {rooms.map(room => (
+                      <option key={room.id} value={room.id}>
+                        {room.college} - {room.batchYear} ({room.totalStudents} students)
+                      </option>
+                    ))}
+                  </select>
                 </div>
               </div>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {/* Student Statistics Section */}
-      {selectedRoom && (
-        <div className="mb-6">
-          <div className="flex items-center justify-between mb-4">
-            <h4 className="text-gray-600 font-medium">
-              Student Activity - {selectedRoom.roomName || selectedRoom.college}
-            </h4>
-            {isLoadingRoomSubmissions && (
-              <Spinner animation="border" size="sm" variant="secondary" />
             )}
-          </div>
 
-          {/* Quick Stats Cards */}
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-            <div className="bg-blue-50 p-4 rounded-lg text-center">
-              <div className="text-2xl font-bold text-blue-600">{studentStats.totalStudents}</div>
-              <div className="text-sm text-gray-600">Active Students</div>
-              <div className="text-xs text-gray-500">(Last {roomSubmissions?.activeTimeWindowMinutes || 30} min)</div>
-            </div>
-            <div className="bg-green-50 p-4 rounded-lg text-center">
-              <div className="text-2xl font-bold text-green-600">{studentStats.solvedSubmissions}</div>
-              <div className="text-sm text-gray-600">Solved</div>
-            </div>
-            <div className="bg-yellow-50 p-4 rounded-lg text-center">
-              <div className="text-2xl font-bold text-yellow-600">{studentStats.totalSubmissions}</div>
-              <div className="text-sm text-gray-600">Total Submissions</div>
-            </div>
-            <div className="bg-purple-50 p-4 rounded-lg text-center">
-              <div className="text-2xl font-bold text-purple-600">
-                {studentStats.totalSubmissions > 0 ? Math.round((studentStats.solvedSubmissions / studentStats.totalSubmissions) * 100) : 0}%
-              </div>
-              <div className="text-sm text-gray-600">Success Rate</div>
-            </div>
-          </div>
+            {/* Live Dashboard Section - Enhanced Cards */}
+            <div className="mb-4">
+              <h5 className="text-white fw-bold mb-3">
+                Live Dashboard
+                {isConnected && (
+                  <span className="ms-2">
+                    <div 
+                      className="d-inline-block rounded-circle"
+                      style={{ 
+                        width: '8px', 
+                        height: '8px', 
+                        backgroundColor: '#22c55e',
+                        animation: 'pulse 2s infinite'
+                      }}
+                    ></div>
+                  </span>
+                )}
+                {(isLoadingDashboard || isLoadingRoomSubmissions) && (
+                  <div className="spinner-border spinner-border-sm text-white ms-2" role="status">
+                    <span className="visually-hidden">Loading...</span>
+                  </div>
+                )}
+              </h5>
+              
+              {dashboardError && (
+                <div className="alert alert-warning mb-3" style={{ fontSize: '14px' }}>
+                  Error loading dashboard data: {dashboardError?.data?.message || 'Unknown error'}
+                </div>
+              )}
+              
+              <div className="d-flex flex-column" style={{ gap: '16px' }}>
+                {/* Active Students Card */}
+                <div 
+                  className="p-3 rounded-4 d-flex align-items-center"
+                  style={{ backgroundColor: 'rgba(255, 255, 255, 0.95)' }}
+                >
+                  <div 
+                    className="me-3 d-flex align-items-center justify-content-center"
+                    style={{ 
+                      width: '35px', 
+                      height: '35px', 
+                      backgroundColor: '#3b82f6',
+                      borderRadius: '8px'
+                    }}
+                  >
+                    <Activity size={18} className="text-white" />
+                  </div>
+                  <div className="flex-grow-1">
+                    <h5 className="fw-bold mb-0" style={{ color: '#3b82f6' }}>
+                      {displayDashboard?.totalActive || studentStats.activeStudents || 0}
+                    </h5>
+                    <p className="text-muted mb-0" style={{ fontSize: '13px' }}>
+                      Active Students (Last {displayDashboard?.activeTimeWindowMinutes || 30} min)
+                    </p>
+                    {studentStats.totalStudents > 0 && (
+                      <small className="text-muted">Total: {studentStats.totalStudents} students</small>
+                    )}
+                  </div>
+                </div>
+                
+                {/* Test Cases Attempted Card */}
+                <div 
+                  className="p-3 rounded-4 d-flex align-items-center"
+                  style={{ backgroundColor: 'rgba(255, 255, 255, 0.95)' }}
+                >
+                  <div 
+                    className="me-3 d-flex align-items-center justify-content-center"
+                    style={{ 
+                      width: '35px', 
+                      height: '35px', 
+                      backgroundColor: '#f59e0b',
+                      borderRadius: '8px'
+                    }}
+                  >
+                    <TrendingUp size={18} className="text-white" />
+                  </div>
+                  <div className="flex-grow-1">
+                    <h5 className="fw-bold mb-0" style={{ color: '#f59e0b' }}>
+                      {displayDashboard?.totalAttempted || 0}
+                    </h5>
+                    <p className="text-muted mb-0" style={{ fontSize: '13px' }}>Test Cases Attempted</p>
+                    {studentStats.totalSubmissions > 0 && (
+                      <small className="text-muted">Total submissions: {studentStats.totalSubmissions}</small>
+                    )}
+                  </div>
+                </div>
+                
+                {/* Test Cases Solved Card */}
+                <div 
+                  className="p-3 rounded-4 d-flex align-items-center"
+                  style={{ backgroundColor: 'rgba(255, 255, 255, 0.95)' }}
+                >
+                  <div 
+                    className="me-3 d-flex align-items-center justify-content-center"
+                    style={{ 
+                      width: '35px', 
+                      height: '35px', 
+                      backgroundColor: '#22c55e',
+                      borderRadius: '8px'
+                    }}
+                  >
+                    <CheckCircle size={18} className="text-white" />
+                  </div>
+                  <div className="flex-grow-1">
+                    <h5 className="fw-bold mb-0" style={{ color: '#22c55e' }}>
+                      {displayDashboard?.totalSolved || 0}
+                    </h5>
+                    <p className="text-muted mb-0" style={{ fontSize: '13px' }}>Test Cases Solved</p>
+                    {studentStats.solvedSubmissions > 0 && (
+                      <small className="text-muted">Success rate: {Math.round((studentStats.solvedSubmissions / studentStats.totalSubmissions) * 100) || 0}%</small>
+                    )}
+                  </div>
+                </div>
 
-          {/* Detailed Student List */}
-          <div className="bg-white rounded-lg shadow-sm border border-gray-100">
-            <div className="bg-gray-50 px-6 py-4 border-b">
-              <h5 className="font-medium text-gray-800">Student Performance Details</h5>
-            </div>
-            <div className="p-6">
-              {studentStats.students.length > 0 ? (
-                <div className="space-y-4">
-                  {studentStats.students.map((student, index) => (
-                    <div key={student.id} className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
-                      <div className="flex items-center space-x-4">
-                        <div className="w-10 h-10 bg-blue-500 rounded-full flex items-center justify-center text-white font-medium">
-                          {index + 1}
-                        </div>
-                        <div>
-                          <h6 className="font-medium text-gray-800">{student.name}</h6>
-                          <p className="text-sm text-gray-500">{student.email}</p>
-                          <p className="text-xs text-gray-400">
-                            Last active: {student.lastActivity ? student.lastActivity.toLocaleString() : 'Never'}
-                          </p>
-                        </div>
-                      </div>
-                      
-                      <div className="flex items-center space-x-6">
-                        <div className="text-center">
-                          <div className="text-lg font-bold text-blue-600">{student.testCases}</div>
-                          <div className="text-xs text-gray-500">Test Cases</div>
-                        </div>
-                        <div className="text-center">
-                          <div className="text-lg font-bold text-yellow-600">{student.attempted}</div>
-                          <div className="text-xs text-gray-500">Attempted</div>
-                        </div>
-                        <div className="text-center">
-                          <div className="text-lg font-bold text-green-600">{student.solved}</div>
-                          <div className="text-xs text-gray-500">Solved</div>
-                        </div>
-                        <div className="text-center">
-                          <div className={`text-lg font-bold ${
-                            student.successRate >= 80 ? 'text-green-600' : 
-                            student.successRate >= 50 ? 'text-yellow-600' : 'text-red-600'
-                          }`}>
-                            {student.successRate}%
+                {/* Student Performance Summary */}
+                {studentStats.students.length > 0 && (
+                  <div 
+                    className="p-3 rounded-4"
+                    style={{ backgroundColor: 'rgba(255, 255, 255, 0.95)' }}
+                  >
+                    <h6 className="fw-bold mb-2" style={{ color: '#4a5568', fontSize: '14px' }}>
+                      Top Performers
+                    </h6>
+                    <div style={{ maxHeight: '150px', overflowY: 'auto' }}>
+                      {studentStats.students.slice(0, 5).map((student, index) => (
+                        <div key={student.id} className="d-flex justify-content-between align-items-center py-1">
+                          <div>
+                            <span className="fw-semibold" style={{ fontSize: '13px' }}>
+                              {index + 1}. {student.name}
+                            </span>
                           </div>
-                          <div className="text-xs text-gray-500">Success</div>
+                          <div className="text-end">
+                            <span 
+                              className="px-2 py-1 rounded-pill"
+                              style={{ 
+                                backgroundColor: student.solved > 0 ? '#dcfce7' : '#fef3c7', 
+                                color: student.solved > 0 ? '#166534' : '#92400e',
+                                fontSize: '11px',
+                                fontWeight: '600'
+                              }}
+                            >
+                              {student.solved} solved
+                            </span>
+                          </div>
                         </div>
-                      </div>
-                      
-                      <div className="w-24">
-                        <div className="w-full bg-gray-200 rounded-full h-2">
-                          <div 
-                            className="bg-green-500 h-2 rounded-full transition-all duration-300" 
-                            style={{ width: `${student.successRate}%` }}
-                          />
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          </Col>
+
+          {/* Right Side - Join Live Room and Solved Test Cases */}
+          <Col lg={7}>
+            {/* Join Live Room Card */}
+            <div 
+              className="p-4 rounded-4 mb-4"
+              style={{ backgroundColor: 'rgba(255, 255, 255, 0.95)' }}
+            >
+              <div className="d-flex align-items-center justify-content-between mb-3">
+                <h6 className="fw-bold mb-0" style={{ color: '#4a5568' }}>Join Live Room</h6>
+                <Link to="/teacher/create-room" className="text-decoration-none">
+                  <Button
+                    className="px-4 py-2 fw-semibold border-0"
+                    style={{
+                      backgroundColor: '#f6ad55',
+                      borderRadius: '20px',
+                      fontSize: '14px'
+                    }}
+                  >
+                    <Plus size={16} className="me-2" />
+                    Create
+                  </Button>
+                </Link>
+              </div>
+              
+              {/* Room List */}
+              <div>
+                {rooms?.map((room, index) => (
+                  <div 
+                    key={room.id} 
+                    className={`d-flex align-items-center justify-content-between py-3 ${
+                      room.id === selectedRoomId ? 'bg-light rounded' : ''
+                    }`}
+                    style={{ 
+                      position: 'relative',
+                      cursor: 'pointer',
+                      padding: room.id === selectedRoomId ? '12px' : '12px 0'
+                    }}
+                    onClick={() => handleRoomSelect(room.id)}
+                  >
+                    {index < rooms.length - 1 && !room.id === selectedRoomId && (
+                      <div 
+                        className="border-bottom position-absolute" 
+                        style={{ left: '1rem', right: '1rem', bottom: '0' }}
+                      ></div>
+                    )}
+                    <div className="d-flex align-items-start flex-grow-1">
+                      <span 
+                        className="me-3 fw-bold"
+                        style={{ 
+                          color: room.id === selectedRoomId ? '#6c5ce7' : '#4a5568',
+                          fontSize: '16px',
+                          minWidth: '20px'
+                        }}
+                      >
+                        {index + 1}.
+                      </span>
+                      <div className="flex-grow-1">
+                        <div 
+                          className="fw-semibold mb-2" 
+                          style={{ 
+                            color: room.id === selectedRoomId ? '#6c5ce7' : '#2d3748', 
+                            fontSize: '15px' 
+                          }}
+                        >
+                          {room.college}, {room.batchYear}, {room.tutor || room.roomName}, {room.totalStudents} Students
+                        </div>
+                        <div className="d-flex align-items-center text-muted" style={{ fontSize: '13px' }}>
+                          <div className="d-flex align-items-center me-4">
+                            <Users size={12} className="me-1" />
+                            <span>Tutor: {room.tutor || 'Teacher'}</span>
+                          </div>
+                          <div className="d-flex align-items-center me-4">
+                            <BookOpen size={12} className="me-1" />
+                            <span>Batch: {room.batchYear}</span>
+                          </div>
+                          <div className="d-flex align-items-center me-4">
+                            <Users size={12} className="me-1" />
+                            <span>Students: {room.totalStudents}</span>
+                          </div>
+                          <div className="d-flex align-items-center">
+                            <Clock size={12} className="me-1" />
+                            <span>Duration: {room.totalDuration} min</span>
+                          </div>
                         </div>
                       </div>
                     </div>
-                  ))}
+                    <div className="d-flex align-items-center ms-3">
+                      <span 
+                        className="me-3 text-muted"
+                        style={{ fontSize: '14px' }}
+                      >
+                        Room Code: {room.code}
+                      </span>
+                      <div className="d-flex">
+                        <Link to={`/teacher/room/${room.id}`} className="text-decoration-none me-2">
+                          <Button
+                            className="px-4 py-2 fw-semibold border-0"
+                            style={{
+                              backgroundColor: room.id === selectedRoomId ? '#6c5ce7' : '#f6ad55',
+                              borderRadius: '20px',
+                              fontSize: '14px'
+                            }}
+                          >
+                            {room.id === selectedRoomId ? 'Active' : 'Join'}
+                          </Button>
+                        </Link>
+                        <Button
+                          className="px-3 py-2 fw-semibold border-0"
+                          style={{
+                            backgroundColor: '#e53e3e',
+                            borderRadius: '20px',
+                            fontSize: '14px'
+                          }}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleDeleteClick(room);
+                          }}
+                        >
+                          <Trash2 size={16} />
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Solved Test Cases Table - Enhanced */}
+            <div 
+              className="p-4 rounded-4 mb-4"
+              style={{ backgroundColor: 'rgba(255, 255, 255, 0.95)' }}
+            >
+              <div className="d-flex align-items-center justify-content-between mb-3">
+                <h6 className="fw-bold mb-0" style={{ color: '#4a5568' }}>
+                  Recent Solved Test Cases 
+                  <span className="ms-2 text-muted" style={{ fontSize: '14px' }}>
+                    ({solvedTestCasesToDisplay.length} recent)
+                  </span>
+                </h6>
+                {selectedRoom && (
+                  <span className="text-muted" style={{ fontSize: '12px' }}>
+                    Room: {selectedRoom.college}
+                  </span>
+                )}
+              </div>
+              
+              {solvedTestCasesToDisplay && solvedTestCasesToDisplay.length > 0 ? (
+                <div className="table-responsive">
+                  <table className="table table-borderless">
+                    <thead>
+                      <tr style={{ backgroundColor: '#f8fafc' }}>
+                        <th className="fw-semibold text-muted py-3 px-4" style={{ fontSize: '14px' }}>Test Case</th>
+                        <th className="fw-semibold text-muted py-3" style={{ fontSize: '14px' }}>Student</th>
+                        <th className="fw-semibold text-muted py-3" style={{ fontSize: '14px' }}>Status</th>
+                        <th className="fw-semibold text-muted py-3" style={{ fontSize: '14px' }}>Time Taken</th>
+                        <th className="fw-semibold text-muted py-3" style={{ fontSize: '14px' }}>Solved</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {solvedTestCasesToDisplay.map((testCase, index) => (
+                        <tr 
+                          key={`${testCase.testCaseId}-${testCase.studentId}-${testCase.timestamp}-${index}`}
+                          style={{ 
+                            backgroundColor: index % 2 === 0 ? 'transparent' : '#f8fafc',
+                            transition: 'background-color 0.2s ease'
+                          }}
+                        >
+                          <td className="py-3 px-4">
+                            <div>
+                              <code 
+                                className="text-primary" 
+                                style={{ fontSize: '13px', fontWeight: '500' }}
+                              >
+                                {testCase.testCaseTitle || `Test ${testCase.testCaseId?.substring(0, 8) || 'Unknown'}`}
+                              </code>
+                              <br />
+                              <small className="text-muted">
+                                ID: {testCase.testCaseId?.substring(0, 8) || 'N/A'}...
+                              </small>
+                            </div>
+                          </td>
+                          <td className="py-3">
+                            <div>
+                              <span className="fw-semibold" style={{ fontSize: '14px' }}>
+                                {testCase.studentName || 'Unknown Student'}
+                              </span>
+                              <br />
+                              <small className="text-muted">
+                                ID: {testCase.studentId?.substring(0, 8) || 'N/A'}...
+                              </small>
+                            </div>
+                          </td>
+                          <td className="py-3">
+                            <span 
+                              className="px-3 py-1 rounded-pill d-inline-flex align-items-center"
+                              style={{ 
+                                backgroundColor: '#dcfce7', 
+                                color: '#166534',
+                                fontSize: '12px',
+                                fontWeight: '600'
+                              }}
+                            >
+                              <CheckCircle size={12} className="me-1" />
+                              Solved
+                            </span>
+                          </td>
+                          <td className="py-3">
+                            <span className="fw-semibold" style={{ color: '#059669' }}>
+                              {testCase.timeTaken || 0}s
+                            </span>
+                          </td>
+                          <td className="py-3 text-muted">
+                            {formatTime(testCase.timestamp)}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
                 </div>
               ) : (
-                <div className="text-center py-8 text-gray-500">
-                  <p>No student activity yet in this room.</p>
-                  <p className="text-sm">Students will appear here once they start submitting solutions.</p>
+                <div className="text-center py-5">
+                  <div 
+                    className="mx-auto mb-3 d-flex align-items-center justify-content-center"
+                    style={{ 
+                      width: '48px', 
+                      height: '48px', 
+                      backgroundColor: '#f3f4f6',
+                      borderRadius: '12px'
+                    }}
+                  >
+                    <BookOpen size={24} className="text-muted" />
+                  </div>
+                  <p className="text-muted mb-0">
+                    {selectedRoom ? 'No solved test cases yet for this room' : 'Select a room to view solved test cases'}
+                  </p>
+                  {selectedRoom && (
+                    <small className="text-muted">
+                      Students will appear here once they start solving test cases
+                    </small>
+                  )}
                 </div>
               )}
             </div>
-          </div>
-        </div>
-      )}
 
-      {/* Original Submissions Section (Legacy) */}
-      <h4 className="text-gray-600 font-medium">All Submissions Overview</h4>
-      {isLoadingSubmissions ? (
-        <div className="text-center py-5">
-          <Spinner animation="border" variant="secondary" />
-        </div>
-      ) : submissionsError ? (
-        <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mb-4">
-          {submissionsError?.data?.message || 'Failed to load submissions'}
-        </div>
-      ) : (
-        <div className="bg-gray-50 rounded shadow-sm p-4 mb-4">
-          {/* Summary Section */}
-          <div className="mb-3">
-            <div className="font-medium">Test Case Published: Waiting for Students to solve</div>
-            <div className="text-sm text-gray-700">
-              Total Active: {Array.isArray(submissions) ? submissions.length : 0} &nbsp;
-              Total Solved: {Array.isArray(submissions) ? submissions.filter(s => s.status === 'Solved').length : 0} &nbsp;
-              Total Attempted: {Array.isArray(submissions) ? submissions.length : 0}
-            </div>
-          </div>
-          {/* Student List */}
-          <ol className="list-decimal pl-5">
-            {Array.isArray(submissions) && submissions.length > 0 ? (
-              submissions.map((submission, idx) => (
-                <li key={submission.id} className="mb-1">
-                  {submission.studentName || `Student ${idx + 1}`} {submission.status === 'Solved' ? 'Solved' : 'Not Solved'}
-                </li>
-              ))
-            ) : (
-              <li>No submissions yet.</li>
+            {/* Student Activity Summary */}
+            {studentStats.students.length > 0 && (
+              <div 
+                className="p-4 rounded-4"
+                style={{ backgroundColor: 'rgba(255, 255, 255, 0.95)' }}
+              >
+                <div className="d-flex align-items-center justify-content-between mb-3">
+                  <h6 className="fw-bold mb-0" style={{ color: '#4a5568' }}>
+                    Student Activity Summary
+                  </h6>
+                  <span className="text-muted" style={{ fontSize: '12px' }}>
+                    {studentStats.students.length} active students
+                  </span>
+                </div>
+                
+                <div className="table-responsive">
+                  <table className="table table-borderless table-sm">
+                    <thead>
+                      <tr style={{ backgroundColor: '#f8fafc' }}>
+                        <th className="fw-semibold text-muted py-2" style={{ fontSize: '13px' }}>Student</th>
+                        <th className="fw-semibold text-muted py-2" style={{ fontSize: '13px' }}>Attempted</th>
+                        <th className="fw-semibold text-muted py-2" style={{ fontSize: '13px' }}>Solved</th>
+                        <th className="fw-semibold text-muted py-2" style={{ fontSize: '13px' }}>Success Rate</th>
+                        <th className="fw-semibold text-muted py-2" style={{ fontSize: '13px' }}>Last Activity</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {studentStats.students.slice(0, 10).map((student, index) => (
+                        <tr key={student.id}>
+                          <td className="py-2">
+                            <div>
+                              <span className="fw-semibold" style={{ fontSize: '13px' }}>
+                                {student.name}
+                              </span>
+                              <br />
+                              <small className="text-muted">{student.email}</small>
+                            </div>
+                          </td>
+                          <td className="py-2">
+                            <span className="fw-semibold text-warning">
+                              {student.testCases}
+                            </span>
+                          </td>
+                          <td className="py-2">
+                            <span className="fw-semibold text-success">
+                              {student.solved}
+                            </span>
+                          </td>
+                          <td className="py-2">
+                            <span 
+                              className="px-2 py-1 rounded-pill"
+                              style={{ 
+                                backgroundColor: student.successRate > 70 ? '#dcfce7' : student.successRate > 40 ? '#fef3c7' : '#fee2e2',
+                                color: student.successRate > 70 ? '#166534' : student.successRate > 40 ? '#92400e' : '#dc2626',
+                                fontSize: '11px',
+                                fontWeight: '600'
+                              }}
+                            >
+                              {student.successRate}%
+                            </span>
+                          </td>
+                          <td className="py-2 text-muted" style={{ fontSize: '12px' }}>
+                            {student.lastActivity ? formatTime(student.lastActivity) : 'No activity'}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                
+                {studentStats.students.length > 10 && (
+                  <div className="text-center mt-3">
+                    <small className="text-muted">
+                      Showing top 10 students. {studentStats.students.length - 10} more students have activity.
+                    </small>
+                  </div>
+                )}
+              </div>
             )}
-          </ol>
-        </div>
-      )}
+          </Col>
+        </Row>
+      </div>
+
+      <style jsx>{`
+        @keyframes pulse {
+          0%, 100% { opacity: 1; }
+          50% { opacity: 0.5; }
+        }
+        
+        .table tbody tr:hover {
+          background-color: #f8fafc !important;
+        }
+        
+        .form-select:focus {
+          border-color: #6c5ce7;
+          box-shadow: 0 0 0 0.2rem rgba(108, 92, 231, 0.25);
+        }
+      `}</style>
     </div>
   );
 };

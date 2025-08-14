@@ -19,6 +19,7 @@ model room {
   subject         String?
   totalDuration   Int?
   totalStudents   Int?
+  description     String?
   user            user              @relation(fields: [teacherId], references: [id], map: "Room_teacherId_fkey")
   roomparticipant roomparticipant[]
   testcase        testcase[]
@@ -27,21 +28,25 @@ model room {
 }
 
 model submission {
-  id         String   @id
-  testCaseId String
-  userId     String?
-  code       String
-  output     String
-  status     String
-  studentId  String
-  createdAt  DateTime @default(now())
-  timeTaken  Int?
-  testcase   testcase @relation(fields: [testCaseId], references: [id], map: "Submission_testCaseId_fkey")
-  user       user?    @relation(fields: [userId], references: [id], map: "Submission_userId_fkey")
+  id            String   @id
+  testCaseId    String
+  userId        String?
+  code          String
+  output        String
+  status        String
+  studentId     String
+  createdAt     DateTime @default(now())
+  timeTaken     Int?
+  errorDetails  String?   // ✅ Added field for storing error messages
+  executionTime Float?    // ✅ You might also want this since you pass it in
+  memoryUsed    Int?      // ✅ Same for memory usage
+  testcase      testcase  @relation(fields: [testCaseId], references: [id], map: "Submission_testCaseId_fkey")
+  user          user?     @relation(fields: [userId], references: [id], map: "Submission_userId_fkey")
 
   @@index([testCaseId], map: "Submission_testCaseId_fkey")
   @@index([userId], map: "Submission_userId_fkey")
 }
+
 
 model testcase {
   id             String       @id
@@ -51,6 +56,7 @@ model testcase {
   createdAt      DateTime     @default(now())
   createdBy      String
   title          String       @default("Untitled Test Case")
+  description    String?
   submission     submission[]
   room           room         @relation(fields: [roomId], references: [id], onDelete: Cascade, map: "TestCase_roomId_fkey")
 
@@ -58,7 +64,7 @@ model testcase {
 }
 
 model user {
-  id              String            @id
+  id              String            @id @default(uuid())
   name            String
   email           String            @unique(map: "User_email_key")
   password        String

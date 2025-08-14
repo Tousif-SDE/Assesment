@@ -2,6 +2,8 @@ import { useState, useEffect } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useSelector } from 'react-redux'
 import { useRegisterMutation } from '../../redux/api/authApi'
+import { Container, Row, Col, Card, Form, Button, Alert, Spinner } from 'react-bootstrap'
+import { User, Mail, Lock, Shield, UserPlus } from 'lucide-react'
 
 const Register = () => {
   const [name, setName] = useState('')
@@ -17,13 +19,8 @@ const Register = () => {
   const [register, { isLoading }] = useRegisterMutation()
 
   useEffect(() => {
-    // If already logged in, redirect to appropriate dashboard
     if (userInfo) {
-      if (userInfo.role === 'TEACHER') {
-        navigate('/teacher')
-      } else {
-        navigate('/student')
-      }
+      navigate(userInfo.role === 'TEACHER' ? '/teacher' : '/student')
     }
   }, [userInfo, navigate])
 
@@ -31,7 +28,6 @@ const Register = () => {
     e.preventDefault()
     setError(null)
 
-    // Validate passwords match
     if (password !== confirmPassword) {
       setError('Passwords do not match')
       return
@@ -40,122 +36,199 @@ const Register = () => {
     try {
       await register({ name, email, password, role }).unwrap()
       setSuccess(true)
-      
-      // Clear form
       setName('')
       setEmail('')
       setPassword('')
       setConfirmPassword('')
-      
-      // Redirect to login after 2 seconds
-      setTimeout(() => {
-        navigate('/login')
-      }, 2000)
+      setTimeout(() => navigate('/login'), 2000)
     } catch (err) {
       setError(err?.data?.message || 'Registration failed')
     }
   }
 
   return (
-    <div className="flex justify-center items-center min-h-[80vh]">
-      <div className="w-full max-w-md">
-        <div className="bg-white p-6 rounded-lg shadow-md auth-container">
-          <h2 className="text-2xl font-bold text-center mb-6 text-dark">Register</h2>
-          
-          {error && (
-            <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mb-4" role="alert">
-              <span>{error}</span>
-            </div>
-          )}
-          {success && (
-            <div className="bg-green-100 border border-green-400 text-green-700 px-4 py-3 rounded mb-4" role="alert">
-              <span>Registration successful! Redirecting to login...</span>
-            </div>
-          )}
-          
-          <form onSubmit={submitHandler}>
-            <div className="mb-4">
-              <label htmlFor="name" className="block text-gray-700 text-sm font-medium mb-2">Name</label>
-              <input
-                type="text"
-                id="name"
-                placeholder="Enter name"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                required
-                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
-              />
-            </div>
+    <div style={{
+      minHeight: '100vh',
+      width: '100vw',
+      background: 'linear-gradient(135deg, #f5f3ff, #ede9fe, #ddd6fe)',
+      display: 'flex',
+      alignItems: 'center',
+      padding: '20px',
+      margin: 0,
+      position: 'fixed',
+      top: 0,
+      left: 0,
+      overflow: 'auto'
+    }}>
+      <Container>
+        <Row className="justify-content-center">
+          <Col md={7} lg={6}>
+            <Card style={{
+              borderRadius: '24px',
+              border: 'none',
+              boxShadow: '0 20px 60px rgba(139, 92, 246, 0.15)'
+            }}>
+              <Card.Body className="p-5">
+                <div className="text-center mb-4">
+                  <div style={{
+                    background: 'linear-gradient(135deg, #8b5cf6, #a855f7)',
+                    borderRadius: '20px',
+                    width: '60px',
+                    height: '60px',
+                    margin: '0 auto 20px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center'
+                  }}>
+                    <UserPlus size={28} color="white" />
+                  </div>
+                  <h2 style={{ fontSize: '28px', fontWeight: '700', color: '#1f2937', marginBottom: '8px' }}>
+                    Join Skelo
+                  </h2>
+                  <p style={{ color: '#6b7280', marginBottom: '30px' }}>Create your account</p>
+                </div>
 
-            <div className="mb-4">
-              <label htmlFor="email" className="block text-gray-700 text-sm font-medium mb-2">Email Address</label>
-              <input
-                type="email"
-                id="email"
-                placeholder="Enter email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                required
-                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
-              />
-            </div>
+                {error && (
+                  <Alert variant="danger" style={{ borderRadius: '12px', backgroundColor: '#fef2f2', border: 'none', color: '#dc2626' }}>
+                    {error}
+                  </Alert>
+                )}
+                {success && (
+                  <Alert variant="success" style={{ borderRadius: '12px', backgroundColor: '#f0fdf4', border: 'none', color: '#16a34a' }}>
+                    Success! Redirecting to login...
+                  </Alert>
+                )}
 
-            <div className="mb-4">
-              <label htmlFor="password" className="block text-gray-700 text-sm font-medium mb-2">Password</label>
-              <input
-                type="password"
-                id="password"
-                placeholder="Enter password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                required
-                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
-              />
-            </div>
+                <Form onSubmit={submitHandler}>
+                  <Row>
+                    <Col md={6}>
+                      <Form.Group className="mb-3">
+                        <Form.Label style={{ fontWeight: '600', color: '#374151', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                          <User size={16} color="#8b5cf6" /> Name
+                        </Form.Label>
+                        <Form.Control
+                          type="text"
+                          placeholder="Full name"
+                          value={name}
+                          onChange={(e) => setName(e.target.value)}
+                          required
+                          style={{
+                            borderRadius: '12px',
+                            border: '2px solid #e5e7eb',
+                            padding: '12px 16px'
+                          }}
+                        />
+                      </Form.Group>
+                    </Col>
+                    <Col md={6}>
+                      <Form.Group className="mb-3">
+                        <Form.Label style={{ fontWeight: '600', color: '#374151', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                          <Mail size={16} color="#8b5cf6" /> Email
+                        </Form.Label>
+                        <Form.Control
+                          type="email"
+                          placeholder="Email address"
+                          value={email}
+                          onChange={(e) => setEmail(e.target.value)}
+                          required
+                          style={{
+                            borderRadius: '12px',
+                            border: '2px solid #e5e7eb',
+                            padding: '12px 16px'
+                          }}
+                        />
+                      </Form.Group>
+                    </Col>
+                  </Row>
 
-            <div className="mb-4">
-              <label htmlFor="confirmPassword" className="block text-gray-700 text-sm font-medium mb-2">Confirm Password</label>
-              <input
-                type="password"
-                id="confirmPassword"
-                placeholder="Confirm password"
-                value={confirmPassword}
-                onChange={(e) => setConfirmPassword(e.target.value)}
-                required
-                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
-              />
-            </div>
+                  <Row>
+                    <Col md={6}>
+                      <Form.Group className="mb-3">
+                        <Form.Label style={{ fontWeight: '600', color: '#374151', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                          <Lock size={16} color="#8b5cf6" /> Password
+                        </Form.Label>
+                        <Form.Control
+                          type="password"
+                          placeholder="Password"
+                          value={password}
+                          onChange={(e) => setPassword(e.target.value)}
+                          required
+                          style={{
+                            borderRadius: '12px',
+                            border: '2px solid #e5e7eb',
+                            padding: '12px 16px'
+                          }}
+                        />
+                      </Form.Group>
+                    </Col>
+                    <Col md={6}>
+                      <Form.Group className="mb-3">
+                        <Form.Label style={{ fontWeight: '600', color: '#374151', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                          <Lock size={16} color="#8b5cf6" /> Confirm
+                        </Form.Label>
+                        <Form.Control
+                          type="password"
+                          placeholder="Confirm password"
+                          value={confirmPassword}
+                          onChange={(e) => setConfirmPassword(e.target.value)}
+                          required
+                          style={{
+                            borderRadius: '12px',
+                            border: '2px solid #e5e7eb',
+                            padding: '12px 16px'
+                          }}
+                        />
+                      </Form.Group>
+                    </Col>
+                  </Row>
 
-            <div className="mb-4">
-              <label htmlFor="role" className="block text-gray-700 text-sm font-medium mb-2">Role</label>
-              <select
-                id="role"
-                value={role}
-                onChange={(e) => setRole(e.target.value)}
-                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
-              >
-                <option value="STUDENT">Student</option>
-                <option value="TEACHER">Teacher</option>
-              </select>
-            </div>
+                  <Form.Group className="mb-4">
+                    <Form.Label style={{ fontWeight: '600', color: '#374151', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <Shield size={16} color="#8b5cf6" /> I am a
+                    </Form.Label>
+                    <Form.Select
+                      value={role}
+                      onChange={(e) => setRole(e.target.value)}
+                      style={{
+                        borderRadius: '12px',
+                        border: '2px solid #e5e7eb',
+                        padding: '12px 16px'
+                      }}
+                    >
+                      <option value="STUDENT">Student</option>
+                      <option value="TEACHER">Teacher</option>
+                    </Form.Select>
+                  </Form.Group>
 
-            <button
-              type="submit"
-              className={`w-full bg-primary text-white py-2 px-4 rounded-md hover:bg-opacity-90 transition-colors mt-4 ${(isLoading || success) ? 'opacity-70 cursor-not-allowed' : ''}`}
-              disabled={isLoading || success}
-            >
-              {isLoading ? 'Registering...' : 'Register'}
-            </button>
-          </form>
+                  <Button
+                    type="submit"
+                    disabled={isLoading || success}
+                    className="w-100"
+                    style={{
+                      background: 'linear-gradient(135deg, #8b5cf6, #a855f7)',
+                      border: 'none',
+                      borderRadius: '12px',
+                      padding: '12px',
+                      fontSize: '16px',
+                      fontWeight: '600',
+                      marginBottom: '20px'
+                    }}
+                  >
+                    {isLoading ? <><Spinner size="sm" className="me-2" />Creating...</> : 'Create Account'}
+                  </Button>
+                </Form>
 
-          <div className="mt-6 text-center">
-            <span className="text-gray-600">Already have an account?{' '}</span>
-            <Link to="/login" className="text-primary hover:underline">
-              Sign In
-            </Link>
-          </div>
-        </div>
-      </div>
+                <div className="text-center">
+                  <span style={{ color: '#6b7280' }}>Already have an account? </span>
+                  <Link to="/login" style={{ color: '#8b5cf6', textDecoration: 'none', fontWeight: '600' }}>
+                    Sign In
+                  </Link>
+                </div>
+              </Card.Body>
+            </Card>
+          </Col>
+        </Row>
+      </Container>
     </div>
   )
 }

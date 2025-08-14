@@ -12,7 +12,8 @@ export const createRoom = async (req, res) => {
       totalStudents,
       totalDuration,
       code,
-      tutor // Add tutor field from the form
+      tutor, // Add tutor field from the form
+      description
     } = req.body;
 
     // Generate a UUID for the room ID
@@ -28,6 +29,7 @@ export const createRoom = async (req, res) => {
         totalStudents,
         totalDuration,
         code,
+        description,
         updatedAt: new Date(),
         // ✅ Correct relation name in schema
         user: { connect: { id: req.user.id } }
@@ -36,6 +38,18 @@ export const createRoom = async (req, res) => {
         user: true // Will return teacher info
       }
     });
+
+    // Also push description to in-memory/socket layer for immediate sync
+    try {
+      const socketManager = req.app.get('socketManager');
+      if (socketManager?.rooms && socketManager.rooms.has(newRoom.id)) {
+        const roomData = socketManager.rooms.get(newRoom.id);
+        roomData.description = newRoom.description;
+        socketManager.persistRoomData(newRoom.id, roomData);
+      }
+    } catch (e) {
+      // non-blocking
+    }
 
     res.status(201).json(newRoom);
   } catch (error) {

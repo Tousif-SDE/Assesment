@@ -22,13 +22,13 @@ export const roomApi = apiSlice.injectEndpoints({
       }),
       invalidatesTags: ['Room'],
     }),
-    
-    // Student endpoints
+        
+    // Student endpoints - FIXED: Changed from '/room/join' to '/joinstudent'
     joinRoom: builder.mutation({
       query: (data) => ({
-        url: '/room/join',
+        url: '/room/join', // Fixed endpoint to match Postman
         method: 'POST',
-        body: data, // Accept the full data object
+        body: data,
       }),
     }),
   }),
